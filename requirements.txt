@@ -1,0 +1,16 @@
+# Python 필수 패키지
+# PDF 데이터 처리 및 MySQL DB 적재 프로그램
+
+# PDF 테이블 추출
+pdfplumber>=0.10.0
+
+# MySQL 데이터베이스 드라이버
+pymysql>=1.1.0
+
+# CSV 및 데이터 처리 (기본 라이브러리에 포함되어 있으나 명시)
+# csv, json, pathlib는 Python 표준 라이브러리
+
+# 시각화 (선택 사항 - visualize_normalization.py 사용 시)
+# matplotlib>=3.7.0
+# pandas>=2.0.0
+
