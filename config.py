@@ -20,7 +20,7 @@ NORMALIZED_OUTPUT_DIR.mkdir(exist_ok=True)
 MYSQL_CONFIG = {
     "host": "localhost",
     "user": "root",
-    "password": "0731",  # 실제 MySQL root 비밀번호로 변경
+    "password": "0731",
     "database": "convert_pdf",
     "port": 3306,
     "charset": "utf8mb4"

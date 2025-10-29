@@ -2,17 +2,15 @@
 정부/공공기관 표준 데이터 처리 메인 스크립트
 PDF → JSON → 정규화 → DB 적재 → 시각화 → 검증
 """
-import os
 import json
 from pathlib import Path
 import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
 from typing import Dict, Any
 
 # 모듈 임포트
+from extract_pdf_tables import extract_pdf_to_json
 from normalize_government_standard import GovernmentStandardNormalizer
 from load_government_standard_db import GovernmentStandardDBLoader
 from config import MYSQL_CONFIG
@@ -33,7 +31,8 @@ class GovernmentDataPipeline:
     """정부 표준 데이터 처리 파이프라인"""
     
     def __init__(self):
-        self.input_dir = Path("output")  # JSON 파일 위치
+        self.input_dir = Path("input")  # PDF 파일 위치
+        self.json_dir = Path("output")  # JSON 파일 위치
         self.output_dir = Path("normalized_output_government")
         self.visualization_dir = Path("visualization_government")
         self.visualization_dir.mkdir(exist_ok=True)
@@ -41,6 +40,7 @@ class GovernmentDataPipeline:
         # 통계
         self.pipeline_stats = {
             'start_time': datetime.now(),
+            'pdf_files_processed': 0,
             'json_files_processed': 0,
             'total_tables_extracted': 0,
             'normalized_records': 0,
@@ -49,6 +49,54 @@ class GovernmentDataPipeline:
             'errors': []
         }
     
+    def run_pdf_extraction(self) -> Dict[str, int]:
+        """PDF에서 JSON 추출"""
+        logger.info("📄 PDF 추출 프로세스 시작...")
+
+        extraction_stats = {
+            'files_processed': 0,
+            'total_tables': 0
+        }
+
+        # PDF 파일 찾기
+        pdf_files = list(self.input_dir.glob("*.pdf"))
+
+        if not pdf_files:
+            logger.warning("⚠️ input 폴더에 PDF 파일이 없습니다. JSON 파일로 직접 진행합니다.")
+            return extraction_stats
+
+        logger.info(f"📂 {len(pdf_files)}개 PDF 파일 발견")
+
+        for pdf_file in pdf_files:
+            try:
+                logger.info(f"📄 처리 중: {pdf_file.name}")
+
+                # PDF 추출
+                output_filename = pdf_file.stem + "_extracted.json"
+                output_path = extract_pdf_to_json(
+                    str(pdf_file),
+                    str(self.json_dir),
+                    output_filename
+                )
+
+                # 추출 결과 확인
+                with open(output_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    table_count = len(data)
+                    extraction_stats['total_tables'] += table_count
+
+                extraction_stats['files_processed'] += 1
+                logger.info(f"✅ {pdf_file.name} 추출 완료 ({table_count}개 테이블)")
+
+            except Exception as e:
+                logger.error(f"❌ {pdf_file.name} 추출 실패: {e}")
+                self.pipeline_stats['errors'].append(f"PDF 추출 실패: {pdf_file.name}")
+
+        self.pipeline_stats['pdf_files_processed'] = extraction_stats['files_processed']
+        self.pipeline_stats['total_tables_extracted'] = extraction_stats['total_tables']
+
+        return extraction_stats
+
     def run_normalization(self) -> Dict[str, int]:
         """정규화 실행"""
         logger.info("🔄 정규화 프로세스 시작...")
@@ -60,8 +108,8 @@ class GovernmentDataPipeline:
         }
         
         # JSON 파일 찾기
-        json_files = list(self.input_dir.glob("*.json"))
-        
+        json_files = list(self.json_dir.glob("*.json"))
+
         if not json_files:
             logger.error("❌ JSON 파일을 찾을 수 없습니다.")
             return normalized_stats
@@ -177,7 +225,7 @@ class GovernmentDataPipeline:
         ax1.grid(True, alpha=0.3)
         
         # 파이 차트
-        colors = plt.cm.Set3(range(len(tables)))
+        colors = ['#8dd3c7', '#ffffb3', '#bebada', '#fb8072', '#80b1d3', '#fdb462'][:len(tables)]
         ax2.pie(counts, labels=tables, autopct='%1.1f%%', colors=colors)
         ax2.set_title('Data Distribution')
         
@@ -285,16 +333,17 @@ class GovernmentDataPipeline:
         fig, ax = plt.subplots(1, 1, figsize=(12, 8))
         
         # 파이프라인 단계별 통계
-        stages = ['JSON Files', 'Normalized\nRecords', 'DB Records\nLoaded']
+        stages = ['PDF Files', 'JSON Files', 'Normalized\nRecords', 'DB Records\nLoaded']
         values = [
+            self.pipeline_stats['pdf_files_processed'],
             self.pipeline_stats['json_files_processed'],
             self.pipeline_stats['normalized_records'],
             self.pipeline_stats['db_records_loaded']
         ]
         
         # 색상 그라데이션
-        colors = ['#3498DB', '#2ECC71', '#F39C12']
-        
+        colors = ['#9B59B6', '#3498DB', '#2ECC71', '#F39C12']
+
         # 바 차트
         bars = ax.bar(stages, values, color=colors, alpha=0.8, edgecolor='black', linewidth=2)
         
@@ -344,6 +393,13 @@ class GovernmentDataPipeline:
         report.append(f"소요 시간: {(datetime.now() - self.pipeline_stats['start_time']).total_seconds():.1f}초")
         report.append("")
         
+        # PDF 추출 결과 (있을 경우)
+        if self.pipeline_stats['pdf_files_processed'] > 0:
+            report.append("📄 PDF 추출 결과:")
+            report.append(f"  • 처리된 PDF 파일: {self.pipeline_stats['pdf_files_processed']}개")
+            report.append(f"  • 추출된 테이블: {self.pipeline_stats['total_tables_extracted']}개")
+            report.append("")
+
         report.append("📁 정규화 결과:")
         report.append(f"  • 처리된 JSON 파일: {normalized_stats.get('files_processed', 0)}개")
         report.append(f"  • 총 정규화 레코드: {normalized_stats.get('total_records', 0):,}건")
@@ -412,20 +468,23 @@ class GovernmentDataPipeline:
         logger.info("🚀 정부 표준 데이터 처리 파이프라인 시작")
         
         try:
-            # 1. 정규화
+            # 1. PDF 추출 (있을 경우)
+            extraction_stats = self.run_pdf_extraction()
+
+            # 2. 정규화
             normalized_stats = self.run_normalization()
             
             if normalized_stats['files_processed'] == 0:
                 logger.error("❌ 정규화할 파일이 없습니다.")
                 return False
             
-            # 2. 데이터베이스 적재
+            # 3. 데이터베이스 적재
             db_verification = self.load_to_database()
             
-            # 3. 시각화
+            # 4. 시각화
             self.visualize_data(normalized_stats, db_verification)
             
-            # 4. 보고서 생성
+            # 5. 보고서 생성
             self.generate_report(normalized_stats, db_verification)
             
             logger.info("✅ 파이프라인 완료!")

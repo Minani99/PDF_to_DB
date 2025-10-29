@@ -24,7 +24,11 @@ PDF 문서에서 추출한 데이터를 정부/공공기관 표준에 맞춰 정
 pip install -r requirements.txt
 ```
 
-### 2. MySQL 설정
+### 2. PDF 파일 준비
+- PDF 파일을 `input/` 폴더에 넣기
+- 또는 기존 JSON 파일을 `output/` 폴더에 넣기
+
+### 3. MySQL 설정
 `config.py` 파일에서 MySQL 비밀번호 설정:
 ```python
 MYSQL_CONFIG = {
@@ -32,9 +36,12 @@ MYSQL_CONFIG = {
 }
 ```
 
-### 3. 실행
+### 4. 실행
 ```bash
-# 전체 파이프라인 실행 (정규화 → DB 적재 → 시각화)
+# PDF만 추출 (JSON 생성)
+python extract_pdf_tables.py
+
+# 전체 파이프라인 실행 (PDF 추출 → 정규화 → DB 적재 → 시각화)
 python main_government_standard.py
 
 # 테스트 실행 (DB 없이 정규화와 시각화만)
@@ -45,8 +52,9 @@ python test_government_pipeline.py
 
 ```
 정부 표준 정규화 시스템
-├── normalize_government_standard.py  # 정규화 엔진
-├── load_government_standard_db.py    # DB 적재 모듈
+├── extract_pdf_tables.py             # PDF → JSON 추출
+├── normalize_government_standard.py  # JSON → CSV 정규화
+├── load_government_standard_db.py    # CSV → DB 적재
 ├── main_government_standard.py       # 통합 파이프라인
 └── test_government_pipeline.py       # 테스트 및 검증
 ```
@@ -81,6 +89,7 @@ INSERT INTO normalized_schedules VALUES
 ```
 /home/user/webapp/
 ├── config.py                          # 설정 파일
+├── extract_pdf_tables.py              # PDF 추출 모듈 🆕
 ├── normalize_government_standard.py   # 정규화 엔진
 ├── load_government_standard_db.py     # DB 적재 모듈
 ├── main_government_standard.py        # 메인 파이프라인
@@ -88,14 +97,16 @@ INSERT INTO normalized_schedules VALUES
 ├── README.md                          # 이 문서
 ├── GOVERNMENT_STANDARD_README.md      # 상세 기술 문서
 ├── requirements.txt                   # 패키지 의존성
-├── output/                            # JSON 입력 데이터
+├── input/                             # PDF 입력 파일 🆕
+├── output/                            # JSON 추출 결과 🆕
 ├── normalized_output_government/      # 정규화된 CSV 출력
 └── visualization_government/          # 시각화 결과
 ```
 
 ## 🛠️ 기술 스택
-- **Python 3.12**
+- **Python 3.13**
 - **MySQL 8.0**
+- **PDFPlumber**: PDF 테이블 추출
 - **Pandas**: 데이터 처리
 - **Matplotlib/Seaborn**: 시각화
 - **PyMySQL**: 데이터베이스 연결
