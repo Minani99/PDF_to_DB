@@ -1,6 +1,9 @@
 # PDF to Database - 정부/공공기관 표준 시스템
 # Python 3.12+ required
 
+# Core Requirements
+# ================
+
 # Database
 pymysql==1.1.2
 
@@ -8,16 +11,16 @@ pymysql==1.1.2
 pandas==2.2.3
 numpy==1.26.4
 
-# Visualization
+# Visualization  
 matplotlib==3.10.3
 seaborn==0.13.2
-
-# JSON Processing
-# (Python built-in json module used)
 
 # Date/Time
 python-dateutil==2.9.0
 
-# Optional: PDF Processing (if needed)
-# pdfplumber==0.10.3
-# PyPDF2==3.0.1
+# PDF Processing (Required for PDF extraction)
+pdfplumber==0.10.3
+
+# Optional Dependencies
+# =====================
+# PyPDF2==3.0.1  # Alternative PDF processor
