@@ -1,201 +1,128 @@
-# PDF to Database - 정부/공공기관 표준 데이터 정규화 시스템
+# 정부 표준 PDF → JSON → DB 정규화 시스템
 
-## 🎯 프로젝트 개요
-PDF 문서에서 데이터를 추출하여 정부/공공기관 표준에 맞춰 정규화하고 MySQL 데이터베이스에 적재하는 완전한 End-to-End 시스템입니다.
+정부/공공기관 문서의 PDF를 JSON으로 변환하고, 3NF/BCNF 정규화를 거쳐 MySQL 데이터베이스에 적재하는 통합 시스템
 
-### 📌 v1.1.0 업데이트
-- ✅ **PDF → JSON 변환 모듈 추가** 
-- ✅ **완전한 파이프라인 구성** (PDF → JSON → 정규화 → DB)
-- ✅ **통합 테스트 시스템**
-- ✅ **샘플 데이터 모드 지원** (PDF 없이도 테스트 가능)
+## 🎯 주요 기능
 
-## ✨ 주요 특징
-
-### 1. 정부 표준 준수
-- **원본 데이터 보존**: 감사 추적을 위한 완전한 원본 데이터 보관
-- **정규화 데이터 분리**: 분석 최적화를 위한 별도 정규화 테이블
-- **3NF/BCNF 준수**: 데이터 중복 최소화 및 무결성 보장
-
-### 2. 핵심 기능
-- **일정 정규화**: "1/4분기~2/4분기" → 개별 분기별 레코드 생성
-- **성과 데이터 추출**: 특허, 논문, 인력양성 등 100% 정확도
-- **예산 정규화**: 다년도 × 유형별 분리 저장
-- **데이터 시각화**: 5종 분석 차트 자동 생성
-
-## 🚀 빠른 시작
-
-### 1. 환경 설정
-```bash
-# 패키지 설치
-pip install -r requirements.txt
-```
-
-<<<<<<< HEAD
-### 2. MySQL 설정 (선택사항)
-=======
-### 2. PDF 파일 준비
-- PDF 파일을 `input/` 폴더에 넣기
-- 또는 기존 JSON 파일을 `output/` 폴더에 넣기
-
-### 3. MySQL 설정
->>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
-`config.py` 파일에서 MySQL 비밀번호 설정:
-```python
-MYSQL_CONFIG = {
-    "password": "your_password_here"  # 실제 비밀번호로 변경
-}
-```
-
-<<<<<<< HEAD
-### 3. 실행 방법
-=======
-### 4. 실행
-```bash
-# PDF만 추출 (JSON 생성)
-python extract_pdf_tables.py
-
-# 전체 파이프라인 실행 (PDF 추출 → 정규화 → DB 적재 → 시각화)
-python main_government_standard.py
->>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
-
-#### 완전한 파이프라인 (PDF → DB)
-```bash
-# PDF 파일 처리
-python main_complete_pipeline.py your_document.pdf
-
-# 샘플 데이터로 테스트 (PDF 없이)
-python main_complete_pipeline.py
-
-# DB 적재 건너뛰기
-python main_complete_pipeline.py --skip-db
-```
-
-#### 시스템 검증
-```bash
-# 전체 시스템 테스트
-python test_complete_system.py
-```
-
-## 📊 시스템 구조
-
-```
-<<<<<<< HEAD
-정부 표준 데이터 처리 시스템 (v1.1.0)
-│
-├── 📄 PDF 처리
-│   └── extract_pdf_to_json.py        # PDF → JSON 변환
-│
-├── 🔄 데이터 정규화
-│   └── normalize_government_standard.py  # 정규화 엔진
-│
-├── 💾 데이터베이스
-│   └── load_government_standard_db.py    # DB 적재 모듈
-│
-├── 🚀 실행 모듈
-│   ├── main_complete_pipeline.py     # 완전한 파이프라인
-│   ├── main_government_standard.py   # 정규화 중심 실행
-│   └── test_government_pipeline.py   # 정규화 테스트
-│
-└── 🧪 테스트
-    └── test_complete_system.py       # 통합 시스템 검증
-=======
-정부 표준 정규화 시스템
-├── extract_pdf_tables.py             # PDF → JSON 추출
-├── normalize_government_standard.py  # JSON → CSV 정규화
-├── load_government_standard_db.py    # CSV → DB 적재
-├── main_government_standard.py       # 통합 파이프라인
-└── test_government_pipeline.py       # 테스트 및 검증
->>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
-```
-
-## 📈 처리 결과 예시
-
-### 입력 데이터
-```json
-["특허", "국내출원", "1,001"]
-["1/4분기~2/4분기", "뇌지도 구축", "세부내용"]
-```
-
-### 출력 데이터
-```sql
--- 성과 데이터
-INSERT INTO normalized_performances VALUES 
-  (1, 1, '특허', '국내출원', 1001, '건');
-
--- 일정 데이터 (분기별 분리)
-INSERT INTO normalized_schedules VALUES 
-  (1, 1, 2024, 1, '뇌지도 구축'),  -- 1분기
-  (2, 1, 2024, 2, '뇌지도 구축');  -- 2분기
-```
-
-## 🔍 데이터 검증
-- ✅ 모든 내역사업에 대한 데이터 존재 여부
-- ✅ 외래키 참조 무결성
-- ✅ 데이터 완전성 100% 달성
+- **PDF → JSON 변환**: PDF 문서를 구조화된 JSON 형식으로 추출
+- **데이터 정규화**: 3NF/BCNF 표준에 따른 데이터 정규화
+- **DB 적재**: MySQL 데이터베이스에 정규화된 데이터 적재
+- **동적 연도 처리**: 문서별 연도 자동 감지 및 처리
+- **스케줄 분할**: 병합된 분기(예: "1/4분기~2/4분기")를 개별 레코드로 분할
+- **100% 정확도**: 특허, 논문, 인력 등 숫자 데이터 정확한 추출
 
 ## 📁 프로젝트 구조
 
 ```
-<<<<<<< HEAD
-PDF_to_DB/
-├── 📄 핵심 모듈
-│   ├── extract_pdf_to_json.py         # PDF 추출 (NEW)
-│   ├── normalize_government_standard.py   # 정규화 엔진
-│   ├── load_government_standard_db.py     # DB 적재
-│   └── config.py                          # 설정
-│
-├── 🚀 실행 파일
-│   ├── main_complete_pipeline.py      # 완전한 파이프라인 (NEW)
-│   ├── main_government_standard.py    # 정규화 파이프라인
-│   └── test_government_pipeline.py    # 정규화 테스트
-│
-├── 🧪 테스트
-│   └── test_complete_system.py        # 시스템 검증 (NEW)
-│
-├── 📚 문서
-│   ├── README.md                      # 이 문서
-│   └── GOVERNMENT_STANDARD_README.md  # 기술 상세
-│
-├── 📁 데이터 폴더
-│   ├── input/                         # PDF 입력
-│   ├── output/                        # JSON 출력
-│   ├── normalized_output_government/  # CSV 출력
-│   └── visualization_government/      # 보고서
-│
-└── 📦 기타
-    └── requirements.txt               # 패키지 의존성
-=======
 /home/user/webapp/
-├── config.py                          # 설정 파일
-├── extract_pdf_tables.py              # PDF 추출 모듈 🆕
-├── normalize_government_standard.py   # 정규화 엔진
-├── load_government_standard_db.py     # DB 적재 모듈
-├── main_government_standard.py        # 메인 파이프라인
-├── test_government_pipeline.py        # 테스트 모듈
-├── README.md                          # 이 문서
-├── GOVERNMENT_STANDARD_README.md      # 상세 기술 문서
-├── requirements.txt                   # 패키지 의존성
-├── input/                             # PDF 입력 파일 🆕
-├── output/                            # JSON 추출 결과 🆕
-├── normalized_output_government/      # 정규화된 CSV 출력
-└── visualization_government/          # 시각화 결과
->>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
+├── main.py                              # 메인 통합 파이프라인
+├── extract_pdf_to_json.py              # PDF → JSON 변환 모듈
+├── normalize_government_standard.py     # 데이터 정규화 엔진
+├── load_government_standard_db.py       # DB 적재 모듈
+├── config.py                            # 설정 파일
+├── requirements.txt                     # 의존성 패키지
+├── input/                               # PDF 입력 폴더
+├── output/                              # JSON 출력 폴더
+├── normalized_output_proper/            # 정규화된 CSV 출력
+└── reports/                             # 처리 보고서
 ```
 
-## 🛠️ 기술 스택
-- **Python 3.13**
-- **MySQL 8.0**
-- **PDFPlumber**: PDF 테이블 추출
-- **Pandas**: 데이터 처리
-- **Matplotlib/Seaborn**: 시각화
-- **PyMySQL**: 데이터베이스 연결
+## 🚀 사용법
 
-## 📝 상세 문서
-자세한 기술 사양과 구현 세부사항은 [GOVERNMENT_STANDARD_README.md](GOVERNMENT_STANDARD_README.md)를 참조하세요.
+### 1. 기본 실행 (input 폴더의 PDF 처리)
+```bash
+python main.py
+```
 
-## 📞 문의
-프로젝트 관련 문의사항은 GitHub Issues를 통해 등록해주세요.
+### 2. 샘플 데이터로 테스트 (PDF 없이)
+```bash
+python main.py --sample
+```
 
----
-**최종 버전**: 1.0.0  
-**마지막 업데이트**: 2025-10-29
+### 3. DB 적재 스킵 (정규화까지만)
+```bash
+python main.py --skip-db
+```
+
+### 4. 특정 PDF 파일 처리
+```bash
+python main.py --file path/to/document.pdf
+```
+
+### 5. 디버그 모드
+```bash
+python main.py --debug
+```
+
+## 📊 데이터 구조
+
+### 내역사업 기반 계층 구조
+```
+내역사업명 (Sub-Project)
+    ├── 사업개요 (Overview)
+    ├── 추진실적 (Performance) 
+    │   ├── 특허 (Patents)
+    │   ├── 논문 (Papers)
+    │   └── 인력양성 (Human Resources)
+    └── 추진계획 (Plan)
+        ├── 일정 (Schedule) - 분기별 분할
+        └── 예산 (Budget)
+```
+
+### 정규화된 테이블
+- `sub_projects`: 내역사업 마스터
+- `raw_data`: 원본 데이터 보존
+- `normalized_schedules`: 정규화된 일정 (분기별 분할)
+- `normalized_performances`: 정규화된 성과 지표
+- `normalized_budgets`: 정규화된 예산 데이터
+- `normalized_overviews`: 사업개요 정보
+
+## 🔧 설치
+
+### 필수 패키지 설치
+```bash
+pip install -r requirements.txt
+```
+
+### MySQL 설정 (DB 적재 시)
+`config.py`에서 MySQL 연결 정보 설정:
+```python
+MYSQL_CONFIG = {
+    'host': 'localhost',
+    'user': 'your_username',
+    'password': 'your_password',
+    'database': 'government_standard',
+    'charset': 'utf8mb4'
+}
+```
+
+## 📈 처리 흐름
+
+1. **PDF 추출**: `extract_pdf_to_json.py`
+   - PDF 파일을 읽어 페이지별 텍스트와 테이블 추출
+   - 구조화된 JSON 형식으로 저장
+
+2. **데이터 정규화**: `normalize_government_standard.py`
+   - JSON 데이터를 3NF/BCNF 표준에 맞춰 정규화
+   - 분기별 일정 분할 ("1/4~2/4" → Q1, Q2 개별 레코드)
+   - 연도별 성과/예산 데이터 분리
+
+3. **DB 적재**: `load_government_standard_db.py`
+   - 정규화된 데이터를 MySQL에 적재
+   - 외래키 제약조건 및 CASCADE 설정
+   - 트랜잭션 관리로 데이터 무결성 보장
+
+## 🎓 정부 표준 준수
+
+- **원본 데이터 보존**: raw_data 테이블에 원본 그대로 저장
+- **정규화 뷰 제공**: normalized_* 테이블로 분석 가능한 구조 제공
+- **감사 추적**: 모든 데이터에 원본 참조 ID 유지
+- **표준 코드 체계**: GOV-YYYY-XXX 형식의 프로젝트 코드
+
+## 📝 라이센스
+
+MIT License
+
+## 👥 문의
+
+기술 지원이 필요하시면 이슈를 등록해 주세요.

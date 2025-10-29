@@ -643,7 +643,14 @@ class GovernmentStandardNormalizer:
             value = str(row[1]).strip()
             
             if '내역사업명' in key and value:
-                # 내역사업 생성
+                # 이미 등록된 내역사업인지 체크
+                for proj in self.data['sub_projects']:
+                    if proj['sub_project_name'] == value:
+                        self.current_context['sub_project_id'] = proj['id']
+                        logger.info(f"📌 기존 내역사업 재사용: {value} (ID: {proj['id']})")
+                        return True
+                
+                # 새로운 내역사업 생성
                 sub_id = self._get_next_id('sub_project')
                 project = {
                     'id': sub_id,
@@ -665,51 +672,104 @@ class GovernmentStandardNormalizer:
         return False
     
     def normalize(self, json_data: Dict) -> bool:
-        """JSON 데이터 정규화 (extract_pdf_tables.py 호환)"""
+        """JSON 데이터 정규화 (extract_pdf_to_json.py 호환)"""
         try:
             logger.info(f"🚀 정부 표준 정규화 시작")
             
-            # 문서 연도 설정
-            self.current_context['document_year'] = 2024
-            self.current_context['performance_year'] = 2023
-            self.current_context['plan_year'] = 2024
+            # 메타데이터에서 문서 연도 추출
+            metadata = json_data.get('metadata', {})
+            self.current_context['document_year'] = metadata.get('document_year', 2024)
+            self.current_context['performance_year'] = self.current_context['document_year'] - 1
+            self.current_context['plan_year'] = self.current_context['document_year']
             
-            # extract_pdf_tables.py 형식: 리스트로 전달됨
-            tables_data = json_data if isinstance(json_data, list) else json_data.get('pages', [])
-
-            # 페이지별로 테이블 그룹화
+            # extract_pdf_to_json.py 형식: pages 안에 page별 데이터
+            pages_data = json_data.get('pages', [])
+            
+            # 페이지별로 처리할 테이블 수집
             pages_by_number = {}
-            for table in tables_data:
-                page_num = table.get('page_number', 1)
+            all_tables = []
+            
+            for page in pages_data:
+                page_num = page.get('page_number', 1)
+                page_category = page.get('category')
+                page_sub_project = page.get('sub_project')
+                page_tables = page.get('tables', [])
+                
                 if page_num not in pages_by_number:
-                    pages_by_number[page_num] = []
-                pages_by_number[page_num].append(table)
+                    pages_by_number[page_num] = {
+                        'category': page_category,
+                        'sub_project': page_sub_project,
+                        'tables': []
+                    }
+                
+                for table in page_tables:
+                    table_with_context = {
+                        'page_number': page_num,
+                        'category': page_category or table.get('category'),
+                        'sub_project': page_sub_project,
+                        'data': table.get('data', []),
+                        'table_number': table.get('table_number', 1)
+                    }
+                    pages_by_number[page_num]['tables'].append(table_with_context)
+                    all_tables.append(table_with_context)
 
-            logger.info(f"📖 총 {len(pages_by_number)}개 페이지, {len(tables_data)}개 테이블 처리")
+            logger.info(f"📖 총 {len(pages_by_number)}개 페이지, {len(all_tables)}개 테이블 처리")
 
             # 페이지별 처리
             for page_num in sorted(pages_by_number.keys()):
-                page_tables = pages_by_number[page_num]
+                page_data = pages_by_number[page_num]
+                page_tables = page_data['tables']
+                page_category = page_data.get('category')
+                page_sub_project = page_data.get('sub_project')
+                
+                # sub_project가 페이지에 명시되어 있으면 설정 (중복 체크)
+                if page_sub_project and not self.current_context.get('sub_project_id'):
+                    # 이미 등록된 내역사업인지 체크
+                    existing_project = None
+                    for proj in self.data['sub_projects']:
+                        if proj['sub_project_name'] == page_sub_project:
+                            existing_project = proj
+                            break
+                    
+                    if existing_project:
+                        self.current_context['sub_project_id'] = existing_project['id']
+                        logger.info(f"📌 기존 내역사업 사용: {page_sub_project} (ID: {existing_project['id']})")
+                    else:
+                        # 새로운 내역사업 생성
+                        sub_id = self._get_next_id('sub_project')
+                        project = {
+                            'id': sub_id,
+                            'project_code': f"GOV-{self.current_context['document_year']}-{sub_id:03d}",
+                            'department_name': '과학기술정보통신부',
+                            'main_project_name': self.current_context.get('main_project', '바이오·의료기술개발'),
+                            'sub_project_name': page_sub_project,
+                            'document_year': self.current_context['document_year']
+                        }
+                        self.data['sub_projects'].append(project)
+                        self.current_context['sub_project_id'] = sub_id
+                        logger.info(f"✅ 내역사업 등록: {page_sub_project} (ID: {sub_id})")
 
-                # 카테고리 감지 (페이지 번호 기반 휴리스틱)
-                category = 'overview'
-                if page_num == 1:
+                # 카테고리 결정 (페이지 카테고리 우선, 없으면 휴리스틱)
+                if page_category:
+                    category = page_category
+                elif page_num == 1:
                     category = 'overview'
                 elif 2 <= page_num <= 3:
                     category = 'performance'
                 else:
                     category = 'plan'
 
-                # 각 테이블의 내용으로 카테고리 재확인
+                # 각 테이블의 내용으로 카테고리 재확인 및 처리
                 for table in page_tables:
                     rows = table.get('data', [])
                     if rows:
                         table_type = self._detect_table_type(rows)
 
-                        # 내역사업 테이블이면 먼저 처리
-                        if table_type == "내역사업" or any('내역사업명' in str(cell) for row in rows for cell in row):
-                            self._process_sub_project(rows)
-                            category = 'overview'
+                        # 내역사업 테이블이면 먼저 처리 (이미 sub_project_id가 있으면 스킵)
+                        if not self.current_context.get('sub_project_id'):
+                            if table_type == "내역사업" or any('내역사업명' in str(cell) for row in rows for cell in row):
+                                if self._process_sub_project(rows):
+                                    category = 'overview'
                         elif table_type == "성과" or any(kw in str(rows) for kw in ['특허', '논문', '인력양성']):
                             category = 'performance'
                         elif table_type == "일정" or any('분기' in str(cell) for row in rows for cell in row):
@@ -717,15 +777,17 @@ class GovernmentStandardNormalizer:
                         elif table_type == "예산" or any(kw in str(rows) for kw in ['예산', '사업비']):
                             category = 'plan'
 
-                # 테이블 처리
-                for table in page_tables:
-                    table_idx = table.get('table_index', 0)
+                        # 테이블 카테고리 오버라이드
+                        if table.get('category'):
+                            category = table['category']
 
+                # 테이블 처리
+                for idx, table in enumerate(page_tables):
                     # 데이터 처리 (sub_project_id가 있을 때만)
-                    if self.current_context['sub_project_id']:
-                        self._process_table(table, page_num, table_idx, category)
+                    if self.current_context.get('sub_project_id'):
+                        self._process_table(table, page_num, idx, category)
                     else:
-                        # sub_project가 없으면 일단 테이블 확인
+                        # sub_project가 없으면 일단 테이블에서 찾기
                         rows = table.get('data', [])
                         if rows:
                             table_type = self._detect_table_type(rows)
