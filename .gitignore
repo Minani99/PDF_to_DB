@@ -19,12 +19,14 @@ ENV/
 *.swp
 *.swo
 
-# 출력 파일
-output/
-normalized_output/
+# 백업 및 이전 버전
+backup_old_versions/
+cleanup_files.py
+
+# 출력 파일 (필요한 것만 제외)
 normalized_output_proper/
-*.csv
-*.json
+normalized_output_improved/
+normalized_output_enterprise/
 
 # 입력 파일 (선택적)
 # input/*.pdf
