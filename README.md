@@ -30,7 +30,15 @@ PDF 문서에서 데이터를 추출하여 정부/공공기관 표준에 맞춰 
 pip install -r requirements.txt
 ```
 
+<<<<<<< HEAD
 ### 2. MySQL 설정 (선택사항)
+=======
+### 2. PDF 파일 준비
+- PDF 파일을 `input/` 폴더에 넣기
+- 또는 기존 JSON 파일을 `output/` 폴더에 넣기
+
+### 3. MySQL 설정
+>>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
 `config.py` 파일에서 MySQL 비밀번호 설정:
 ```python
 MYSQL_CONFIG = {
@@ -38,7 +46,17 @@ MYSQL_CONFIG = {
 }
 ```
 
+<<<<<<< HEAD
 ### 3. 실행 방법
+=======
+### 4. 실행
+```bash
+# PDF만 추출 (JSON 생성)
+python extract_pdf_tables.py
+
+# 전체 파이프라인 실행 (PDF 추출 → 정규화 → DB 적재 → 시각화)
+python main_government_standard.py
+>>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
 
 #### 완전한 파이프라인 (PDF → DB)
 ```bash
@@ -61,6 +79,7 @@ python test_complete_system.py
 ## 📊 시스템 구조
 
 ```
+<<<<<<< HEAD
 정부 표준 데이터 처리 시스템 (v1.1.0)
 │
 ├── 📄 PDF 처리
@@ -79,6 +98,14 @@ python test_complete_system.py
 │
 └── 🧪 테스트
     └── test_complete_system.py       # 통합 시스템 검증
+=======
+정부 표준 정규화 시스템
+├── extract_pdf_tables.py             # PDF → JSON 추출
+├── normalize_government_standard.py  # JSON → CSV 정규화
+├── load_government_standard_db.py    # CSV → DB 적재
+├── main_government_standard.py       # 통합 파이프라인
+└── test_government_pipeline.py       # 테스트 및 검증
+>>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
 ```
 
 ## 📈 처리 결과 예시
@@ -109,6 +136,7 @@ INSERT INTO normalized_schedules VALUES
 ## 📁 프로젝트 구조
 
 ```
+<<<<<<< HEAD
 PDF_to_DB/
 ├── 📄 핵심 모듈
 │   ├── extract_pdf_to_json.py         # PDF 추출 (NEW)
@@ -136,11 +164,28 @@ PDF_to_DB/
 │
 └── 📦 기타
     └── requirements.txt               # 패키지 의존성
+=======
+/home/user/webapp/
+├── config.py                          # 설정 파일
+├── extract_pdf_tables.py              # PDF 추출 모듈 🆕
+├── normalize_government_standard.py   # 정규화 엔진
+├── load_government_standard_db.py     # DB 적재 모듈
+├── main_government_standard.py        # 메인 파이프라인
+├── test_government_pipeline.py        # 테스트 모듈
+├── README.md                          # 이 문서
+├── GOVERNMENT_STANDARD_README.md      # 상세 기술 문서
+├── requirements.txt                   # 패키지 의존성
+├── input/                             # PDF 입력 파일 🆕
+├── output/                            # JSON 추출 결과 🆕
+├── normalized_output_government/      # 정규화된 CSV 출력
+└── visualization_government/          # 시각화 결과
+>>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
 ```
 
 ## 🛠️ 기술 스택
-- **Python 3.12**
+- **Python 3.13**
 - **MySQL 8.0**
+- **PDFPlumber**: PDF 테이블 추출
 - **Pandas**: 데이터 처리
 - **Matplotlib/Seaborn**: 시각화
 - **PyMySQL**: 데이터베이스 연결

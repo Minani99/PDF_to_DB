@@ -185,6 +185,18 @@ class GovernmentStandardNormalizer:
             parts = task.split('-', 1)
             task_category = parts[0].strip()
         
+        # 분기별 종료일 계산 (월별 일수 고려)
+        def get_quarter_end_date(year: int, quarter: int) -> str:
+            month_end = quarter * 3
+            if month_end == 3:
+                return f"{year}-03-31"
+            elif month_end == 6:
+                return f"{year}-06-30"
+            elif month_end == 9:
+                return f"{year}-09-30"  # 9월은 30일까지
+            else:  # 12월
+                return f"{year}-12-31"
+
         # Case 1: 병합된 분기 (1/4분기 ~ 3/4분기)
         if '~' in period and '분기' in period:
             quarter_match = re.search(r'(\d)/4\s*분기\s*~\s*(\d)/4\s*분기', period)
@@ -202,7 +214,7 @@ class GovernmentStandardNormalizer:
                         'month_start': (quarter - 1) * 3 + 1,
                         'month_end': quarter * 3,
                         'start_date': f"{year}-{(quarter-1)*3+1:02d}-01",
-                        'end_date': f"{year}-{quarter*3:02d}-31" if quarter*3 != 6 else f"{year}-06-30",
+                        'end_date': get_quarter_end_date(year, quarter),
                         'task_category': task_category,
                         'task_description': task,
                         'original_period': period
@@ -221,7 +233,7 @@ class GovernmentStandardNormalizer:
                     'month_start': (quarter - 1) * 3 + 1,
                     'month_end': quarter * 3,
                     'start_date': f"{year}-{(quarter-1)*3+1:02d}-01",
-                    'end_date': f"{year}-{quarter*3:02d}-31" if quarter*3 != 6 else f"{year}-06-30",
+                    'end_date': get_quarter_end_date(year, quarter),
                     'task_category': task_category,
                     'task_description': task,
                     'original_period': '연중'
@@ -242,7 +254,7 @@ class GovernmentStandardNormalizer:
                     'month_start': (quarter - 1) * 3 + 1,
                     'month_end': quarter * 3,
                     'start_date': f"{year}-{(quarter-1)*3+1:02d}-01",
-                    'end_date': f"{year}-{quarter*3:02d}-31" if quarter*3 != 6 else f"{year}-06-30",
+                    'end_date': get_quarter_end_date(year, quarter),
                     'task_category': task_category,
                     'task_description': task,
                     'original_period': period
@@ -603,18 +615,22 @@ class GovernmentStandardNormalizer:
     
     def _process_overview(self, rows: List[List], raw_data_id: int):
         """사업개요 처리"""
-        overview = {}
+        overview_data = {}
         for row in rows:
             if len(row) >= 2:
                 key = str(row[0]).strip()
                 value = str(row[1]).strip()
-                overview[key] = value
-        
+                overview_data[key] = value
+
+        # DB 스키마에 맞게 데이터 저장
         self.data['normalized_overviews'].append({
             'id': self._get_next_id('overview'),
             'sub_project_id': self.current_context['sub_project_id'],
             'raw_data_id': raw_data_id,
-            'overview_data': json.dumps(overview, ensure_ascii=False)
+            'overview_type': '사업개요',
+            'content': overview_data.get('사업개요', overview_data.get('사업목표', '')),
+            'objective': overview_data.get('사업목표', overview_data.get('목표', '')),
+            'target_outcome': overview_data.get('목표성과', overview_data.get('기대효과', ''))
         })
     
     def _process_sub_project(self, rows: List[List]) -> bool:
@@ -649,7 +665,7 @@ class GovernmentStandardNormalizer:
         return False
     
     def normalize(self, json_data: Dict) -> bool:
-        """JSON 데이터 정규화 (main_government_standard.py 호환)"""
+        """JSON 데이터 정규화 (extract_pdf_tables.py 호환)"""
         try:
             logger.info(f"🚀 정부 표준 정규화 시작")
             
@@ -658,32 +674,65 @@ class GovernmentStandardNormalizer:
             self.current_context['performance_year'] = 2023
             self.current_context['plan_year'] = 2024
             
+            # extract_pdf_tables.py 형식: 리스트로 전달됨
+            tables_data = json_data if isinstance(json_data, list) else json_data.get('pages', [])
+
+            # 페이지별로 테이블 그룹화
+            pages_by_number = {}
+            for table in tables_data:
+                page_num = table.get('page_number', 1)
+                if page_num not in pages_by_number:
+                    pages_by_number[page_num] = []
+                pages_by_number[page_num].append(table)
+
+            logger.info(f"📖 총 {len(pages_by_number)}개 페이지, {len(tables_data)}개 테이블 처리")
+
             # 페이지별 처리
-            for page_idx, page in enumerate(json_data.get('pages', []), 1):
-                full_text = page.get('full_text', '')
-                
-                # 카테고리 감지
+            for page_num in sorted(pages_by_number.keys()):
+                page_tables = pages_by_number[page_num]
+
+                # 카테고리 감지 (페이지 번호 기반 휴리스틱)
                 category = 'overview'
-                if '(2)' in full_text and '추진실적' in full_text:
+                if page_num == 1:
+                    category = 'overview'
+                elif 2 <= page_num <= 3:
                     category = 'performance'
-                elif '(3)' in full_text and '추진계획' in full_text:
+                else:
                     category = 'plan'
-                
-                # 테이블 처리
-                for table_idx, table in enumerate(page.get('tables', [])):
+
+                # 각 테이블의 내용으로 카테고리 재확인
+                for table in page_tables:
                     rows = table.get('data', [])
-                    if not rows:
-                        continue
-                    
-                    # 내역사업 확인
-                    table_type = self._detect_table_type(rows)
-                    if table_type == "내역사업":
-                        self._process_sub_project(rows)
-                    
-                    # 데이터 처리
+                    if rows:
+                        table_type = self._detect_table_type(rows)
+
+                        # 내역사업 테이블이면 먼저 처리
+                        if table_type == "내역사업" or any('내역사업명' in str(cell) for row in rows for cell in row):
+                            self._process_sub_project(rows)
+                            category = 'overview'
+                        elif table_type == "성과" or any(kw in str(rows) for kw in ['특허', '논문', '인력양성']):
+                            category = 'performance'
+                        elif table_type == "일정" or any('분기' in str(cell) for row in rows for cell in row):
+                            category = 'plan'
+                        elif table_type == "예산" or any(kw in str(rows) for kw in ['예산', '사업비']):
+                            category = 'plan'
+
+                # 테이블 처리
+                for table in page_tables:
+                    table_idx = table.get('table_index', 0)
+
+                    # 데이터 처리 (sub_project_id가 있을 때만)
                     if self.current_context['sub_project_id']:
-                        self._process_table(table, page_idx, table_idx, category)
-            
+                        self._process_table(table, page_num, table_idx, category)
+                    else:
+                        # sub_project가 없으면 일단 테이블 확인
+                        rows = table.get('data', [])
+                        if rows:
+                            table_type = self._detect_table_type(rows)
+                            if table_type == "내역사업":
+                                self._process_sub_project(rows)
+
+            logger.info(f"✅ 정규화 완료: {len(self.data['sub_projects'])}개 내역사업")
             return True
             
         except Exception as e:

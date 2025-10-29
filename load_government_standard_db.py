@@ -54,50 +54,48 @@ class GovernmentStandardDBLoader:
     def connect(self):
         """데이터베이스 연결"""
         try:
+            db_name = self.db_config.get('database', 'government_standard')
+
+            # 먼저 데이터베이스 생성 (없으면)
+            logger.info(f"🔌 데이터베이스 '{db_name}' 확인 중...")
+            temp_conn = pymysql.connect(
+                host=self.db_config.get('host', 'localhost'),
+                user=self.db_config.get('user', 'root'),
+                password=self.db_config['password'],
+                charset='utf8mb4'
+            )
+
+            with temp_conn.cursor() as cursor:
+                cursor.execute(f"""
+                    CREATE DATABASE IF NOT EXISTS {db_name}
+                    CHARACTER SET utf8mb4 
+                    COLLATE utf8mb4_unicode_ci
+                """)
+                temp_conn.commit()
+                logger.info(f"✅ 데이터베이스 '{db_name}' 준비 완료")
+
+            temp_conn.close()
+
+            # 이제 데이터베이스에 연결
             self.connection = pymysql.connect(
                 host=self.db_config.get('host', 'localhost'),
                 user=self.db_config.get('user', 'root'),
                 password=self.db_config['password'],
-                database=self.db_config.get('database', 'government_standard'),
+                database=db_name,
                 charset='utf8mb4',
                 cursorclass=pymysql.cursors.DictCursor
             )
             self.cursor = self.connection.cursor()
             logger.info("✅ 데이터베이스 연결 성공")
-            
-            # 데이터베이스 생성 (없으면)
-            self._create_database_if_not_exists()
-            
+
         except Exception as e:
             logger.error(f"❌ 데이터베이스 연결 실패: {e}")
             raise
-    
+
     def _create_database_if_not_exists(self):
-        """데이터베이스 생성"""
-        db_name = self.db_config.get('database', 'government_standard')
-        
-        # 임시 연결로 데이터베이스 생성
-        temp_conn = pymysql.connect(
-            host=self.db_config.get('host', 'localhost'),
-            user=self.db_config.get('user', 'root'),
-            password=self.db_config['password'],
-            charset='utf8mb4'
-        )
-        
-        with temp_conn.cursor() as cursor:
-            cursor.execute(f"""
-                CREATE DATABASE IF NOT EXISTS {db_name}
-                CHARACTER SET utf8mb4 
-                COLLATE utf8mb4_unicode_ci
-            """)
-            temp_conn.commit()
-            
-        temp_conn.close()
-        
-        # 생성한 데이터베이스 사용
-        self.cursor.execute(f"USE {db_name}")
-        logger.info(f"📦 데이터베이스 '{db_name}' 사용 중")
-    
+        """데이터베이스 생성 (더 이상 사용하지 않음 - connect()에서 처리)"""
+        pass
+
     def drop_existing_tables(self):
         """기존 테이블 삭제"""
         logger.info("🗑️ 기존 테이블 삭제 중...")
@@ -280,20 +278,32 @@ class GovernmentStandardDBLoader:
             # CSV 읽기
             df = pd.read_csv(csv_file, encoding='utf-8-sig')
             
-            # NULL 값 처리
+            if df.empty:
+                logger.warning(f"⚠️ {table_name}에 데이터가 없습니다.")
+                return 0
+
+            # NULL 값 처리 (NaN을 None으로 변환)
+            df = df.replace({pd.NA: None, pd.NaT: None})
             df = df.where(pd.notna(df), None)
             
+            # 빈 문자열을 None으로 처리
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    df[col] = df[col].apply(lambda x: None if x == '' or (isinstance(x, str) and x.strip() == '') else x)
+
             # 날짜 컬럼 처리
             date_columns = ['start_date', 'end_date', 'created_at']
             for col in date_columns:
                 if col in df.columns:
+                    # 날짜 형식 파싱
                     df[col] = pd.to_datetime(df[col], errors='coerce')
-                    df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-            
+                    # NaT는 None으로 변환
+                    df[col] = df[col].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else None)
+
             # JSON 컬럼 처리
             if 'raw_content' in df.columns:
                 df['raw_content'] = df['raw_content'].apply(
-                    lambda x: json.dumps(json.loads(x), ensure_ascii=False) if x else None
+                    lambda x: json.dumps(json.loads(x), ensure_ascii=False) if x and pd.notna(x) else None
                 )
             
             # 데이터 적재
@@ -321,14 +331,21 @@ class GovernmentStandardDBLoader:
                     values = []
                     
                     for record in batch:
+                        # 각 레코드를 튜플로 변환
                         row_values = []
                         for col in columns:
-                            value = record.get(col)
-                            # Decimal 타입 처리
-                            if isinstance(value, (int, float)):
-                                row_values.append(float(value))
+                            val = record.get(col)
+                            # NaN 체크 및 처리
+                            if pd.isna(val):
+                                row_values.append(None)
+                            elif isinstance(val, (int, float)):
+                                # float NaN 체크
+                                if val != val:  # NaN은 자기 자신과 같지 않음
+                                    row_values.append(None)
+                                else:
+                                    row_values.append(val)
                             else:
-                                row_values.append(value)
+                                row_values.append(val)
                         values.append(tuple(row_values))
                     
                     self.cursor.executemany(query, values)

@@ -9,7 +9,7 @@ pymysql==1.1.2
 
 # Data Processing
 pandas==2.2.3
-numpy==1.26.4
+numpy>=2.0.0
 
 # Visualization  
 matplotlib==3.10.3
@@ -18,9 +18,15 @@ seaborn==0.13.2
 # Date/Time
 python-dateutil==2.9.0
 
+<<<<<<< HEAD
 # PDF Processing (Required for PDF extraction)
 pdfplumber==0.10.3
 
 # Optional Dependencies
 # =====================
 # PyPDF2==3.0.1  # Alternative PDF processor
+=======
+# PDF Processing
+pdfplumber==0.10.3
+PyPDF2==3.0.1
+>>>>>>> 32106076abc4cdf8ba59ca0773c34a44fb21a5ca
