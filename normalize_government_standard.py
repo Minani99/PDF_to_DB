@@ -275,152 +275,201 @@ class GovernmentStandardNormalizer:
         normalized = []
         year = self.current_context['performance_year']
         
-        # 특허 데이터 찾기
-        for row in rows:
-            row_text = ' '.join(str(cell) for cell in row).lower()
-            
-            # 특허 데이터 패턴: "1,001 125 74 10"
-            if any(keyword in row_text for keyword in ['특허', '출원', '등록']):
-                numbers = []
-                for cell in row:
-                    try:
-                        num = int(str(cell).replace(',', '').strip())
-                        if num > 0:
-                            numbers.append(num)
-                    except:
-                        pass
+        # 새로운 형식: ["성과지표", "목표", "실적"] 형태
+        # ["특허", "국내출원", "1,001"]
+        for row in rows[1:]:  # 헤더 제외
+            if len(row) < 3:
+                continue
                 
-                if len(numbers) >= 4:
-                    # 국내출원
-                    normalized.append({
-                        'id': self._get_next_id('performance'),
-                        'sub_project_id': self.current_context['sub_project_id'],
-                        'raw_data_id': raw_data_id,
-                        'performance_year': year,
-                        'indicator_category': '특허',
-                        'indicator_type': '국내출원',
-                        'value': numbers[0],
-                        'unit': '건',
-                        'original_text': str(row)
-                    })
-                    
-                    # 국내등록
-                    normalized.append({
-                        'id': self._get_next_id('performance'),
-                        'sub_project_id': self.current_context['sub_project_id'],
-                        'raw_data_id': raw_data_id,
-                        'performance_year': year,
-                        'indicator_category': '특허',
-                        'indicator_type': '국내등록',
-                        'value': numbers[1],
-                        'unit': '건',
-                        'original_text': str(row)
-                    })
-                    
-                    # 국외출원
-                    normalized.append({
-                        'id': self._get_next_id('performance'),
-                        'sub_project_id': self.current_context['sub_project_id'],
-                        'raw_data_id': raw_data_id,
-                        'performance_year': year,
-                        'indicator_category': '특허',
-                        'indicator_type': '국외출원',
-                        'value': numbers[2],
-                        'unit': '건',
-                        'original_text': str(row)
-                    })
-                    
-                    # 국외등록
-                    normalized.append({
-                        'id': self._get_next_id('performance'),
-                        'sub_project_id': self.current_context['sub_project_id'],
-                        'raw_data_id': raw_data_id,
-                        'performance_year': year,
-                        'indicator_category': '특허',
-                        'indicator_type': '국외등록',
-                        'value': numbers[3],
-                        'unit': '건',
-                        'original_text': str(row)
-                    })
+            category = str(row[0]).strip()
+            indicator_type = str(row[1]).strip() if len(row) > 1 else ""
+            value_str = str(row[2]).strip() if len(row) > 2 else str(row[1]).strip()
             
-            # 논문 데이터
-            elif any(keyword in row_text for keyword in ['논문', 'scie', 'if']):
-                numbers = []
-                for cell in row:
-                    try:
-                        num = int(str(cell).replace(',', '').strip())
-                        if num > 0:
-                            numbers.append(num)
-                    except:
-                        pass
+            # 값 추출
+            try:
+                value = int(value_str.replace(',', '').replace('건', '').replace('편', '').replace('명', '').strip())
+            except:
+                continue
+            
+            if value > 0:
+                # 카테고리 정리
+                if '특허' in category:
+                    category = '특허'
+                elif '논문' in category:
+                    category = '논문'
+                elif '인력' in category or '박사' in category or '석사' in category:
+                    category = '인력양성'
+                elif '기술' in category:
+                    category = '기술이전'
+                    
+                # 단위 설정
+                unit = '건'
+                if category == '논문':
+                    unit = '편'
+                elif category == '인력양성':
+                    unit = '명'
+                elif '기술료' in indicator_type:
+                    unit = '백만원'
+                    
+                normalized.append({
+                    'id': self._get_next_id('performance'),
+                    'sub_project_id': self.current_context['sub_project_id'],
+                    'raw_data_id': raw_data_id,
+                    'performance_year': year,
+                    'indicator_category': category,
+                    'indicator_type': indicator_type,
+                    'value': value,
+                    'unit': unit,
+                    'original_text': str(row)
+                })
+        
+        # 구형 형식도 지원 (한 행에 여러 숫자가 있는 경우)
+        if not normalized:
+            for row in rows:
+                row_text = ' '.join(str(cell) for cell in row).lower()
                 
-                if numbers:
-                    # SCIE 논문
-                    if len(numbers) > 2:
+                # 특허 데이터 패턴: "1,001 125 74 10"
+                if any(keyword in row_text for keyword in ['특허', '출원', '등록']):
+                    numbers = []
+                    for cell in row:
+                        try:
+                            num = int(str(cell).replace(',', '').strip())
+                            if num > 0:
+                                numbers.append(num)
+                        except:
+                            pass
+                    
+                    if len(numbers) >= 4:
+                        # 국내출원
                         normalized.append({
                             'id': self._get_next_id('performance'),
                             'sub_project_id': self.current_context['sub_project_id'],
                             'raw_data_id': raw_data_id,
                             'performance_year': year,
-                            'indicator_category': '논문',
-                            'indicator_type': 'SCIE',
-                            'value': max(numbers[2:4]) if len(numbers) > 3 else numbers[-1],
-                            'unit': '편',
-                            'original_text': str(row)
-                        })
-                    
-                    # IF 10이상
-                    if len(numbers) > 1:
-                        normalized.append({
-                            'id': self._get_next_id('performance'),
-                            'sub_project_id': self.current_context['sub_project_id'],
-                            'raw_data_id': raw_data_id,
-                            'performance_year': year,
-                            'indicator_category': '논문',
-                            'indicator_type': 'IF10이상',
-                            'value': numbers[1] if numbers[1] < 500 else numbers[0],
-                            'unit': '편',
-                            'original_text': str(row)
-                        })
-            
-            # 인력양성
-            elif any(keyword in row_text for keyword in ['박사', '석사', '인력']):
-                numbers = []
-                for cell in row:
-                    try:
-                        num = int(str(cell).replace(',', '').strip())
-                        if num > 0:
-                            numbers.append(num)
-                    except:
-                        pass
-                
-                if numbers:
-                    if '박사' in row_text:
-                        normalized.append({
-                            'id': self._get_next_id('performance'),
-                            'sub_project_id': self.current_context['sub_project_id'],
-                            'raw_data_id': raw_data_id,
-                            'performance_year': year,
-                            'indicator_category': '인력양성',
-                            'indicator_type': '박사배출',
+                            'indicator_category': '특허',
+                            'indicator_type': '국내출원',
                             'value': numbers[0],
-                            'unit': '명',
+                            'unit': '건',
                             'original_text': str(row)
                         })
-                    
-                    if '석사' in row_text:
-                        value = numbers[1] if len(numbers) > 1 else numbers[0]
+                        
+                        # 국내등록
                         normalized.append({
                             'id': self._get_next_id('performance'),
                             'sub_project_id': self.current_context['sub_project_id'],
                             'raw_data_id': raw_data_id,
                             'performance_year': year,
-                            'indicator_category': '인력양성',
-                            'indicator_type': '석사배출',
-                            'value': value,
-                            'unit': '명',
+                            'indicator_category': '특허',
+                            'indicator_type': '국내등록',
+                            'value': numbers[1],
+                            'unit': '건',
                             'original_text': str(row)
                         })
+                        
+                        # 국외출원
+                        normalized.append({
+                            'id': self._get_next_id('performance'),
+                            'sub_project_id': self.current_context['sub_project_id'],
+                            'raw_data_id': raw_data_id,
+                            'performance_year': year,
+                            'indicator_category': '특허',
+                            'indicator_type': '국외출원',
+                            'value': numbers[2],
+                            'unit': '건',
+                            'original_text': str(row)
+                        })
+                        
+                        # 국외등록
+                        normalized.append({
+                            'id': self._get_next_id('performance'),
+                            'sub_project_id': self.current_context['sub_project_id'],
+                            'raw_data_id': raw_data_id,
+                            'performance_year': year,
+                            'indicator_category': '특허',
+                            'indicator_type': '국외등록',
+                            'value': numbers[3],
+                            'unit': '건',
+                            'original_text': str(row)
+                        })
+                
+                # 논문 데이터
+                elif any(keyword in row_text for keyword in ['논문', 'scie', 'if']):
+                    numbers = []
+                    for cell in row:
+                        try:
+                            num = int(str(cell).replace(',', '').strip())
+                            if num > 0:
+                                numbers.append(num)
+                        except:
+                            pass
+                    
+                    if numbers:
+                        # SCIE 논문
+                        if len(numbers) > 2:
+                            normalized.append({
+                                'id': self._get_next_id('performance'),
+                                'sub_project_id': self.current_context['sub_project_id'],
+                                'raw_data_id': raw_data_id,
+                                'performance_year': year,
+                                'indicator_category': '논문',
+                                'indicator_type': 'SCIE',
+                                'value': max(numbers[2:4]) if len(numbers) > 3 else numbers[-1],
+                                'unit': '편',
+                                'original_text': str(row)
+                            })
+                        
+                        # IF 10이상
+                        if len(numbers) > 1:
+                            normalized.append({
+                                'id': self._get_next_id('performance'),
+                                'sub_project_id': self.current_context['sub_project_id'],
+                                'raw_data_id': raw_data_id,
+                                'performance_year': year,
+                                'indicator_category': '논문',
+                                'indicator_type': 'IF10이상',
+                                'value': numbers[1] if numbers[1] < 500 else numbers[0],
+                                'unit': '편',
+                                'original_text': str(row)
+                            })
+                
+                # 인력양성
+                elif any(keyword in row_text for keyword in ['박사', '석사', '인력']):
+                    numbers = []
+                    for cell in row:
+                        try:
+                            num = int(str(cell).replace(',', '').strip())
+                            if num > 0:
+                                numbers.append(num)
+                        except:
+                            pass
+                    
+                    if numbers:
+                        if '박사' in row_text:
+                            normalized.append({
+                                'id': self._get_next_id('performance'),
+                                'sub_project_id': self.current_context['sub_project_id'],
+                                'raw_data_id': raw_data_id,
+                                'performance_year': year,
+                                'indicator_category': '인력양성',
+                                'indicator_type': '박사배출',
+                                'value': numbers[0],
+                                'unit': '명',
+                                'original_text': str(row)
+                            })
+                        
+                        if '석사' in row_text:
+                            value = numbers[1] if len(numbers) > 1 else numbers[0]
+                            normalized.append({
+                                'id': self._get_next_id('performance'),
+                                'sub_project_id': self.current_context['sub_project_id'],
+                                'raw_data_id': raw_data_id,
+                                'performance_year': year,
+                                'indicator_category': '인력양성',
+                                'indicator_type': '석사배출',
+                                'value': value,
+                                'unit': '명',
+                                'original_text': str(row)
+                            })
         
         return normalized
     
