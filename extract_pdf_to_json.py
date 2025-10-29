@@ -107,8 +107,24 @@ class GovernmentPDFExtractor:
         if category:
             self.stats['categories_found'].add(category)
         
-        # 내역사업 감지
+        # 내역사업 감지 (텍스트에서)
         sub_project = self._detect_sub_project(full_text)
+
+        # 테이블 추출
+        tables = page.extract_tables()
+
+        # 테이블에서도 내역사업명 찾기
+        if not sub_project and tables:
+            for table in tables:
+                for row in table:
+                    if row and len(row) >= 2:
+                        # "내역사업명" 찾기
+                        if '내역사업' in str(row[0]):
+                            sub_project = str(row[1]).strip()
+                            break
+                if sub_project:
+                    break
+
         if sub_project and sub_project not in self.stats['sub_projects']:
             self.stats['sub_projects'].append(sub_project)
             logger.info(f"  ✓ 내역사업 발견: {sub_project}")
@@ -120,9 +136,6 @@ class GovernmentPDFExtractor:
             "sub_project": sub_project,
             "tables": []
         }
-        
-        # 테이블 추출
-        tables = page.extract_tables()
         
         if tables:
             logger.info(f"  ✓ {len(tables)}개 테이블 발견")
@@ -147,11 +160,22 @@ class GovernmentPDFExtractor:
         if not table:
             return []
         
-        # 빈 행 제거
+        # 빈 행 제거 및 띄어쓰기 문제 수정
         cleaned_table = []
         for row in table:
             if row and any(cell for cell in row if cell and str(cell).strip()):
-                cleaned_row = [str(cell).strip() if cell else "" for cell in row]
+                # PDF 파싱 시 띄어쓰기 문제 수정 (예: "정 부" -> "정부")
+                cleaned_row = []
+                for cell in row:
+                    if cell:
+                        cell_str = str(cell).strip()
+                        # 한글 단어 중간에 공백이 하나씩 끼어있는 경우 제거
+                        # "정 부" -> "정부", "민 간" -> "민간"
+                        if re.match(r'^[\u3131-\u3163\uac00-\ud7a3]\s[\u3131-\u3163\uac00-\ud7a3]$', cell_str):
+                            cell_str = cell_str.replace(' ', '')
+                        cleaned_row.append(cell_str)
+                    else:
+                        cleaned_row.append("")
                 cleaned_table.append(cleaned_row)
         
         # 카테고리별 특수 처리

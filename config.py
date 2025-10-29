@@ -21,7 +21,7 @@ MYSQL_CONFIG = {
     "host": "localhost",
     "user": "root",
     "password": "0731",
-    "database": "convert_pdf",
+    "database": "government_standard",
     "port": 3306,
     "charset": "utf8mb4"
 }

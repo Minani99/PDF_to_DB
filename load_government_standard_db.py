@@ -33,13 +33,15 @@ class GovernmentStandardDBLoader:
         self.cursor = None
         
         # 테이블 생성 순서 (외래키 의존성 고려)
-        self.table_order = [
+        self.tables = [
             'sub_projects',
             'raw_data',
-            'normalized_schedules', 
+            'normalized_schedules',
             'normalized_performances',
             'normalized_budgets',
             'normalized_overviews',
+            'key_achievements',
+            'plan_details',
             'data_statistics'
         ]
         
@@ -104,7 +106,7 @@ class GovernmentStandardDBLoader:
         self.cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
         
         # 역순으로 삭제
-        for table in reversed(self.table_order):
+        for table in reversed(self.tables):
             try:
                 self.cursor.execute(f"DROP TABLE IF EXISTS {table}")
                 logger.info(f"  ✓ {table} 테이블 삭제")
@@ -234,9 +236,14 @@ class GovernmentStandardDBLoader:
                 sub_project_id INT,
                 raw_data_id INT,
                 overview_type VARCHAR(100),
-                content TEXT,
+                main_project TEXT,
+                sub_project TEXT,
+                field TEXT,
+                project_type TEXT,
                 objective TEXT,
-                target_outcome TEXT,
+                content TEXT,
+                managing_dept TEXT,
+                managing_org TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (sub_project_id) REFERENCES sub_projects(id) 
                     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -246,7 +253,39 @@ class GovernmentStandardDBLoader:
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         """)
         
-        # 7. 데이터 통계 (검증용)
+        # 7. 대표성과 (key_achievements)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS key_achievements (
+                id INT PRIMARY KEY,
+                sub_project_id INT,
+                achievement_year INT,
+                achievement_order INT,
+                description TEXT,
+                page_number INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (sub_project_id) REFERENCES sub_projects(id) 
+                    ON DELETE CASCADE ON UPDATE CASCADE,
+                INDEX idx_year (achievement_year)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+        """)
+
+        # 8. 주요 추진계획 내용 (plan_details)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS plan_details (
+                id INT PRIMARY KEY,
+                sub_project_id INT,
+                plan_year INT,
+                plan_order INT,
+                description TEXT,
+                page_number INT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (sub_project_id) REFERENCES sub_projects(id) 
+                    ON DELETE CASCADE ON UPDATE CASCADE,
+                INDEX idx_year (plan_year)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+        """)
+
+        # 9. 데이터 통계 (검증용)
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS data_statistics (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -264,8 +303,8 @@ class GovernmentStandardDBLoader:
         
         self.connection.commit()
         logger.info("✅ 모든 테이블 생성 완료")
-        self.load_stats['tables_created'] = len(self.table_order)
-    
+        self.load_stats['tables_created'] = len(self.tables)
+
     def load_csv_to_table(self, table_name: str) -> int:
         """CSV 파일을 테이블로 적재"""
         csv_file = self.csv_dir / f"{table_name}.csv"
@@ -373,7 +412,7 @@ class GovernmentStandardDBLoader:
         """모든 테이블 적재"""
         logger.info("📥 데이터 적재 시작...")
         
-        for table_name in self.table_order:
+        for table_name in self.tables:
             record_count = self.load_csv_to_table(table_name)
             
             # 통계 테이블 업데이트

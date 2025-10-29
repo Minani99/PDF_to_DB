@@ -1,6 +1,6 @@
 """
-정부/공공기관 표준 데이터 정규화 시스템
-원본 보존 + 정규화 분리 저장
+정부/공공기관 표준 데이터 정규화 시스템 - 완전 개선 버전
+모든 데이터 누락 없이 정규화
 """
 import json
 import csv
@@ -10,8 +10,6 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from decimal import Decimal
 import logging
-from dataclasses import dataclass, field, asdict
-from enum import Enum
 
 # 로깅 설정
 logging.basicConfig(
@@ -21,83 +19,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class SubProject:
-    """내역사업"""
-    id: int
-    project_code: str
-    department_name: str
-    main_project_name: str
-    sub_project_name: str
-    document_year: int
-
-
-@dataclass
-class RawData:
-    """원본 데이터 (감사 추적용)"""
-    id: int
-    sub_project_id: int
-    data_type: str  # 'overview', 'performance', 'plan'
-    data_year: int
-    raw_content: str  # JSON 형태로 원본 저장
-    page_number: int
-    table_index: int
-
-
-@dataclass 
-class NormalizedSchedule:
-    """정규화된 일정"""
-    id: int
-    sub_project_id: int
-    raw_data_id: int
-    year: int
-    quarter: int
-    month_start: int
-    month_end: int
-    start_date: str
-    end_date: str
-    task_category: str
-    task_description: str
-    original_period: str  # 원본 기간 표현
-
-
-@dataclass
-class NormalizedPerformance:
-    """정규화된 성과"""
-    id: int
-    sub_project_id: int
-    raw_data_id: int
-    performance_year: int
-    indicator_category: str  # '특허', '논문', '기술이전', '인력양성'
-    indicator_type: str      # '국내출원', '국내등록', 'SCIE', 'IF10이상' 등
-    value: int
-    unit: str
-    original_text: str
-
-
-@dataclass
-class NormalizedBudget:
-    """정규화된 예산"""
-    id: int
-    sub_project_id: int
-    raw_data_id: int
-    budget_year: int
-    budget_category: str  # '계획', '실적'
-    budget_type: str      # '정부', '민간', '지방비', '기타'
-    amount: Decimal
-    currency: str
-    is_actual: bool      # 실적 여부
-    original_text: str
-
-
 class GovernmentStandardNormalizer:
-    """정부 표준 정규화 클래스"""
-    
+    """정부 표준 정규화 클래스 - 모든 데이터 포함"""
+
     def __init__(self, json_path: str, output_dir: str):
         self.json_path = Path(json_path)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
-        
+
         # ID 카운터
         self.id_counters = {
             'sub_project': 1,
@@ -105,30 +34,30 @@ class GovernmentStandardNormalizer:
             'schedule': 1,
             'performance': 1,
             'budget': 1,
-            'overview': 1
+            'overview': 1,
+            'achievement': 1,
+            'plan_detail': 1
         }
-        
+
         # 데이터 저장소
         self.data = {
             # 마스터
             'sub_projects': [],
-            
+
             # 원본 데이터 (감사용)
             'raw_data': [],
-            'raw_overviews': [],
-            'raw_performances': [],
-            'raw_plans': [],
-            
+
             # 정규화 데이터 (분석용)
             'normalized_schedules': [],
             'normalized_performances': [],
             'normalized_budgets': [],
             'normalized_overviews': [],
-            
-            # 통계 (검증용)
-            'data_statistics': []
+
+            # 텍스트 데이터
+            'key_achievements': [],  # 대표성과
+            'plan_details': [],  # 주요 추진계획 내용
         }
-        
+
         # 컨텍스트
         self.current_context = {
             'sub_project_id': None,
@@ -136,56 +65,125 @@ class GovernmentStandardNormalizer:
             'performance_year': 2023,
             'plan_year': 2024
         }
-        
-        # 캐시
-        self.project_cache = {}
-        
+
         # 검증 통계
         self.validation_stats = {
+            'total_pages': 0,
             'total_tables': 0,
             'processed_tables': 0,
             'normalized_records': 0,
             'errors': []
         }
-    
+
     def _get_next_id(self, entity_type: str) -> int:
         """ID 생성"""
         current = self.id_counters[entity_type]
         self.id_counters[entity_type] += 1
         return current
-    
-    def _save_raw_data(self, data_type: str, content: Any, 
+
+    def _save_raw_data(self, data_type: str, content: Any,
                       page_number: int, table_index: int) -> int:
         """원본 데이터 저장"""
         raw_id = self._get_next_id('raw_data')
-        
+
         self.data['raw_data'].append({
             'id': raw_id,
             'sub_project_id': self.current_context['sub_project_id'],
             'data_type': data_type,
-            'data_year': self.current_context.get(f'{data_type}_year', 
+            'data_year': self.current_context.get(f'{data_type}_year',
                                                  self.current_context['document_year']),
-            'raw_content': json.dumps(content, ensure_ascii=False),
+            'raw_content': json.dumps(content, ensure_ascii=False) if isinstance(content, (dict, list)) else str(content),
             'page_number': page_number,
             'table_index': table_index,
             'created_at': datetime.now().isoformat()
         })
-        
+
         return raw_id
-    
-    def _normalize_schedule_data(self, period: str, task: str, detail: str, 
+
+    def _extract_key_achievements(self, full_text: str, page_number: int) -> List[Dict]:
+        """대표성과 추출"""
+        achievements = []
+
+        # "① 대표성과" 섹션 찾기
+        match = re.search(r'①\s*대표성과(.*?)(?:②|③|\(2\)|\(3\)|$)', full_text, re.DOTALL)
+        if not match:
+            return achievements
+
+        achievement_text = match.group(1).strip()
+
+        # "○" 기호로 개별 성과 분리
+        individual_achievements = re.split(r'\n○\s+', achievement_text)
+
+        for idx, achievement in enumerate(individual_achievements):
+            achievement = achievement.strip()
+            if achievement and len(achievement) > 10:  # 최소 길이 체크
+                achievements.append({
+                    'id': self._get_next_id('achievement'),
+                    'sub_project_id': self.current_context['sub_project_id'],
+                    'achievement_year': self.current_context['performance_year'],
+                    'achievement_order': idx + 1,
+                    'description': achievement,
+                    'page_number': page_number
+                })
+
+        return achievements
+
+    def _extract_plan_details(self, full_text: str, page_number: int) -> List[Dict]:
+        """주요 추진계획 내용 추출"""
+        plans = []
+
+        # "① 주요 추진계획 내용" 섹션 찾기
+        match = re.search(r'①\s*주요\s*추진계획\s*내용(.*?)(?:②|③|\(2\)|\(3\)|$)', full_text, re.DOTALL)
+
+        # 패턴1이 없으면 "(3) 2024년도 추진계획" 섹션에서 ① 이후 내용 찾기
+        if not match:
+            match = re.search(r'\(3\)\s*2024년도\s*추진계획\s*①\s*(.*?)(?:②|③|$)', full_text, re.DOTALL)
+
+        if not match:
+            return []
+
+        plan_text = match.group(1).strip()
+
+        # "○" 또는 "-" 기호로 개별 계획 분리
+        individual_plans = re.split(r'\n[○\-]\s+', plan_text)
+
+        for idx, plan in enumerate(individual_plans):
+            plan = plan.strip()
+            if plan and len(plan) > 5:
+                plans.append({
+                    'id': self._get_next_id('plan_detail'),
+                    'sub_project_id': self.current_context['sub_project_id'],
+                    'plan_year': self.current_context['plan_year'],
+                    'plan_order': idx + 1,
+                    'description': plan,
+                    'page_number': page_number
+                })
+
+        return plans
+
+    def _normalize_schedule_data(self, period: str, task: str, detail: str,
                                 raw_data_id: int) -> List[Dict]:
-        """일정 데이터 정규화 - 분기별로 분리"""
+        """일정 데이터 정규화 - 분기별로 철저히 분리"""
         normalized = []
         year = self.current_context['plan_year']
-        
-        # 작업 카테고리 추출
-        task_category = ""
-        if '-' in task:
-            parts = task.split('-', 1)
-            task_category = parts[0].strip()
-        
-        # 분기별 종료일 계산 (월별 일수 고려)
+
+        # 헤더나 빈 행 필터링
+        if not period or not task or period in ['구분', '추진일정', '추진사항', '항목', '주요내용']:
+            return []
+
+        # task를 개별 항목으로 분리 (• 기준)
+        task_items = []
+        if '•' in task:
+            # "• 리더연구\n- 내용\n• 중견연구\n- 내용" 형태를 분리
+            parts = task.split('•')
+            for part in parts:
+                part = part.strip()
+                if part:
+                    task_items.append('• ' + part)
+        else:
+            task_items = [task]
+
+        # 분기별 종료일 계산
         def get_quarter_end_date(year: int, quarter: int) -> str:
             month_end = quarter * 3
             if month_end == 3:
@@ -193,18 +191,48 @@ class GovernmentStandardNormalizer:
             elif month_end == 6:
                 return f"{year}-06-30"
             elif month_end == 9:
-                return f"{year}-09-30"  # 9월은 30일까지
+                return f"{year}-09-30"
             else:  # 12월
                 return f"{year}-12-31"
 
-        # Case 1: 병합된 분기 (1/4분기 ~ 3/4분기)
-        if '~' in period and '분기' in period:
-            quarter_match = re.search(r'(\d)/4\s*분기\s*~\s*(\d)/4\s*분기', period)
-            if quarter_match:
-                start_q = int(quarter_match.group(1))
-                end_q = int(quarter_match.group(2))
-                
-                for quarter in range(start_q, end_q + 1):
+        # 분기 추출 함수
+        def extract_quarters(period_text):
+            quarters = []
+            # Case 1: 병합된 분기 (1/4분기 ~ 2/4분기)
+            if '~' in period_text and '분기' in period_text:
+                quarter_match = re.search(r'(\d)/4\s*분기\s*~\s*(\d)/4\s*분기', period_text)
+                if quarter_match:
+                    start_q = int(quarter_match.group(1))
+                    end_q = int(quarter_match.group(2))
+                    quarters = list(range(start_q, end_q + 1))
+            # Case 2: 연중
+            elif '연중' in period_text:
+                quarters = [1, 2, 3, 4]
+            # Case 3: 단일 분기
+            elif '분기' in period_text:
+                quarter_match = re.search(r'(\d)/4\s*분기', period_text)
+                if quarter_match:
+                    quarters = [int(quarter_match.group(1))]
+            return quarters
+
+        quarters = extract_quarters(period)
+
+        # 각 항목별로 레코드 생성
+        for task_item in task_items:
+            task_item = task_item.strip()
+            if not task_item:
+                continue
+
+            # 작업 카테고리 추출 (• 리더연구 등)
+            task_category = ""
+            if '•' in task_item:
+                # "• 리더연구" 부분 추출
+                first_line = task_item.split('\n')[0].replace('•', '').strip()
+                task_category = first_line
+
+            # 각 분기별로 레코드 생성
+            if quarters:
+                for quarter in quarters:
                     record = {
                         'id': self._get_next_id('schedule'),
                         'sub_project_id': self.current_context['sub_project_id'],
@@ -216,316 +244,379 @@ class GovernmentStandardNormalizer:
                         'start_date': f"{year}-{(quarter-1)*3+1:02d}-01",
                         'end_date': get_quarter_end_date(year, quarter),
                         'task_category': task_category,
-                        'task_description': task,
+                        'task_description': task_item,
                         'original_period': period
                     }
                     normalized.append(record)
-                    
-        # Case 2: 연중
-        elif '연중' in period:
-            for quarter in range(1, 5):
+            else:
+                # 분기 정보가 없으면 기본값
                 record = {
                     'id': self._get_next_id('schedule'),
                     'sub_project_id': self.current_context['sub_project_id'],
                     'raw_data_id': raw_data_id,
                     'year': year,
-                    'quarter': quarter,
-                    'month_start': (quarter - 1) * 3 + 1,
-                    'month_end': quarter * 3,
-                    'start_date': f"{year}-{(quarter-1)*3+1:02d}-01",
-                    'end_date': get_quarter_end_date(year, quarter),
+                    'quarter': 0,
+                    'month_start': 1,
+                    'month_end': 12,
+                    'start_date': f"{year}-01-01",
+                    'end_date': f"{year}-12-31",
                     'task_category': task_category,
-                    'task_description': task,
-                    'original_period': '연중'
-                }
-                normalized.append(record)
-                
-        # Case 3: 단일 분기
-        elif '분기' in period:
-            quarter_match = re.search(r'(\d)/4\s*분기', period)
-            if quarter_match:
-                quarter = int(quarter_match.group(1))
-                record = {
-                    'id': self._get_next_id('schedule'),
-                    'sub_project_id': self.current_context['sub_project_id'],
-                    'raw_data_id': raw_data_id,
-                    'year': year,
-                    'quarter': quarter,
-                    'month_start': (quarter - 1) * 3 + 1,
-                    'month_end': quarter * 3,
-                    'start_date': f"{year}-{(quarter-1)*3+1:02d}-01",
-                    'end_date': get_quarter_end_date(year, quarter),
-                    'task_category': task_category,
-                    'task_description': task,
+                    'task_description': task_item,
                     'original_period': period
                 }
                 normalized.append(record)
-        
-        # Case 4: 월 단위
-        else:
-            # 기본값으로 하나의 레코드 생성
-            record = {
-                'id': self._get_next_id('schedule'),
-                'sub_project_id': self.current_context['sub_project_id'],
-                'raw_data_id': raw_data_id,
-                'year': year,
-                'quarter': 0,  # 분기 미정
-                'month_start': 1,
-                'month_end': 12,
-                'start_date': f"{year}-01-01",
-                'end_date': f"{year}-12-31",
-                'task_category': task_category,
-                'task_description': task,
-                'original_period': period
-            }
-            normalized.append(record)
-        
+
         return normalized
-    
-    def _normalize_performance_data(self, rows: List[List], raw_data_id: int) -> List[Dict]:
-        """성과 데이터 정규화 - 지표별로 분리"""
+
+    def _normalize_performance_table(self, rows: List[List], raw_data_id: int) -> List[Dict]:
+        """성과 테이블 정규화 - 모든 성과 지표 포함"""
         normalized = []
         year = self.current_context['performance_year']
-        
-        # 새로운 형식: ["성과지표", "목표", "실적"] 형태
-        # ["특허", "국내출원", "1,001"]
-        for row in rows[1:]:  # 헤더 제외
-            if len(row) < 3:
-                continue
-                
-            category = str(row[0]).strip()
-            indicator_type = str(row[1]).strip() if len(row) > 1 else ""
-            value_str = str(row[2]).strip() if len(row) > 2 else str(row[1]).strip()
-            
-            # 값 추출
-            try:
-                value = int(value_str.replace(',', '').replace('건', '').replace('편', '').replace('명', '').strip())
-            except:
-                continue
-            
-            if value > 0:
-                # 카테고리 정리
-                if '특허' in category:
-                    category = '특허'
-                elif '논문' in category:
-                    category = '논문'
-                elif '인력' in category or '박사' in category or '석사' in category:
-                    category = '인력양성'
-                elif '기술' in category:
-                    category = '기술이전'
-                    
-                # 단위 설정
-                unit = '건'
-                if category == '논문':
-                    unit = '편'
-                elif category == '인력양성':
-                    unit = '명'
-                elif '기술료' in indicator_type:
-                    unit = '백만원'
-                    
-                normalized.append({
-                    'id': self._get_next_id('performance'),
-                    'sub_project_id': self.current_context['sub_project_id'],
-                    'raw_data_id': raw_data_id,
-                    'performance_year': year,
-                    'indicator_category': category,
-                    'indicator_type': indicator_type,
-                    'value': value,
-                    'unit': unit,
-                    'original_text': str(row)
-                })
-        
-        # 구형 형식도 지원 (한 행에 여러 숫자가 있는 경우)
-        if not normalized:
-            for row in rows:
-                row_text = ' '.join(str(cell) for cell in row).lower()
-                
-                # 특허 데이터 패턴: "1,001 125 74 10"
-                if any(keyword in row_text for keyword in ['특허', '출원', '등록']):
-                    numbers = []
-                    for cell in row:
+
+        if not rows or len(rows) < 2:
+            return []
+
+        # 테이블 타입 감지
+        header_text = ' '.join(str(c) for c in rows[0]).lower()
+
+        # 1. 특허/논문 복합 테이블
+        if '특허성과' in header_text and '논문성과' in header_text:
+            if len(rows) >= 4:
+                data_row = rows[-1]  # 마지막 행이 실제 데이터
+
+                # 특허 데이터 추출 (0-3번 컬럼)
+                patent_indicators = [
+                    ('국내출원', 0), ('국내등록', 1),
+                    ('국외출원', 2), ('국외등록', 3)
+                ]
+
+                for indicator_type, idx in patent_indicators:
+                    if idx < len(data_row):
                         try:
-                            num = int(str(cell).replace(',', '').strip())
-                            if num > 0:
-                                numbers.append(num)
-                        except:
-                            pass
-                    
-                    if len(numbers) >= 4:
-                        # 국내출원
-                        normalized.append({
-                            'id': self._get_next_id('performance'),
-                            'sub_project_id': self.current_context['sub_project_id'],
-                            'raw_data_id': raw_data_id,
-                            'performance_year': year,
-                            'indicator_category': '특허',
-                            'indicator_type': '국내출원',
-                            'value': numbers[0],
-                            'unit': '건',
-                            'original_text': str(row)
-                        })
-                        
-                        # 국내등록
-                        normalized.append({
-                            'id': self._get_next_id('performance'),
-                            'sub_project_id': self.current_context['sub_project_id'],
-                            'raw_data_id': raw_data_id,
-                            'performance_year': year,
-                            'indicator_category': '특허',
-                            'indicator_type': '국내등록',
-                            'value': numbers[1],
-                            'unit': '건',
-                            'original_text': str(row)
-                        })
-                        
-                        # 국외출원
-                        normalized.append({
-                            'id': self._get_next_id('performance'),
-                            'sub_project_id': self.current_context['sub_project_id'],
-                            'raw_data_id': raw_data_id,
-                            'performance_year': year,
-                            'indicator_category': '특허',
-                            'indicator_type': '국외출원',
-                            'value': numbers[2],
-                            'unit': '건',
-                            'original_text': str(row)
-                        })
-                        
-                        # 국외등록
-                        normalized.append({
-                            'id': self._get_next_id('performance'),
-                            'sub_project_id': self.current_context['sub_project_id'],
-                            'raw_data_id': raw_data_id,
-                            'performance_year': year,
-                            'indicator_category': '특허',
-                            'indicator_type': '국외등록',
-                            'value': numbers[3],
-                            'unit': '건',
-                            'original_text': str(row)
-                        })
-                
-                # 논문 데이터
-                elif any(keyword in row_text for keyword in ['논문', 'scie', 'if']):
-                    numbers = []
-                    for cell in row:
+                            val_str = str(data_row[idx]).replace(',', '').strip()
+                            if val_str and val_str != '-':
+                                val = float(val_str)
+                                if val > 0:
+                                    normalized.append({
+                                        'id': self._get_next_id('performance'),
+                                        'sub_project_id': self.current_context['sub_project_id'],
+                                        'raw_data_id': raw_data_id,
+                                        'performance_year': year,
+                                        'indicator_category': '특허',
+                                        'indicator_type': indicator_type,
+                                        'value': val,
+                                        'unit': '건',
+                                        'original_text': str(rows)
+                                    })
+                        except: pass
+
+                # 논문 데이터 추출 (4-7번 컬럼)
+                paper_indicators = [
+                    ('IF20이상', 4), ('IF10이상', 5),
+                    ('SCIE', 6), ('비SCIE', 7)
+                ]
+
+                for indicator_type, idx in paper_indicators:
+                    if idx < len(data_row):
                         try:
-                            num = int(str(cell).replace(',', '').strip())
-                            if num > 0:
-                                numbers.append(num)
-                        except:
-                            pass
-                    
-                    if numbers:
-                        # SCIE 논문
-                        if len(numbers) > 2:
-                            normalized.append({
-                                'id': self._get_next_id('performance'),
-                                'sub_project_id': self.current_context['sub_project_id'],
-                                'raw_data_id': raw_data_id,
-                                'performance_year': year,
-                                'indicator_category': '논문',
-                                'indicator_type': 'SCIE',
-                                'value': max(numbers[2:4]) if len(numbers) > 3 else numbers[-1],
-                                'unit': '편',
-                                'original_text': str(row)
-                            })
-                        
-                        # IF 10이상
-                        if len(numbers) > 1:
-                            normalized.append({
-                                'id': self._get_next_id('performance'),
-                                'sub_project_id': self.current_context['sub_project_id'],
-                                'raw_data_id': raw_data_id,
-                                'performance_year': year,
-                                'indicator_category': '논문',
-                                'indicator_type': 'IF10이상',
-                                'value': numbers[1] if numbers[1] < 500 else numbers[0],
-                                'unit': '편',
-                                'original_text': str(row)
-                            })
-                
-                # 인력양성
-                elif any(keyword in row_text for keyword in ['박사', '석사', '인력']):
-                    numbers = []
-                    for cell in row:
-                        try:
-                            num = int(str(cell).replace(',', '').strip())
-                            if num > 0:
-                                numbers.append(num)
-                        except:
-                            pass
-                    
-                    if numbers:
-                        if '박사' in row_text:
-                            normalized.append({
-                                'id': self._get_next_id('performance'),
-                                'sub_project_id': self.current_context['sub_project_id'],
-                                'raw_data_id': raw_data_id,
-                                'performance_year': year,
-                                'indicator_category': '인력양성',
-                                'indicator_type': '박사배출',
-                                'value': numbers[0],
-                                'unit': '명',
-                                'original_text': str(row)
-                            })
-                        
-                        if '석사' in row_text:
-                            value = numbers[1] if len(numbers) > 1 else numbers[0]
-                            normalized.append({
-                                'id': self._get_next_id('performance'),
-                                'sub_project_id': self.current_context['sub_project_id'],
-                                'raw_data_id': raw_data_id,
-                                'performance_year': year,
-                                'indicator_category': '인력양성',
-                                'indicator_type': '석사배출',
-                                'value': value,
-                                'unit': '명',
-                                'original_text': str(row)
-                            })
-        
+                            val_str = str(data_row[idx]).replace(',', '').strip()
+                            if val_str and val_str != '-':
+                                val = float(val_str)
+                                if val > 0:
+                                    normalized.append({
+                                        'id': self._get_next_id('performance'),
+                                        'sub_project_id': self.current_context['sub_project_id'],
+                                        'raw_data_id': raw_data_id,
+                                        'performance_year': year,
+                                        'indicator_category': '논문',
+                                        'indicator_type': indicator_type,
+                                        'value': val,
+                                        'unit': '편',
+                                        'original_text': str(rows)
+                                    })
+                        except: pass
+
+        # 2. 기술이전 테이블
+        elif '기술이전' in header_text or '기술료' in header_text:
+            if len(rows) >= 3:
+                data_row = rows[-1]
+
+                # 기술지도 (0번 컬럼)
+                if len(data_row) > 0:
+                    try:
+                        val_str = str(data_row[0]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '기술이전',
+                                    'indicator_type': '기술지도',
+                                    'value': val,
+                                    'unit': '건',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+                # 기술이전 (1번 컬럼)
+                if len(data_row) > 1:
+                    try:
+                        val_str = str(data_row[1]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '기술이전',
+                                    'indicator_type': '기술이전',
+                                    'value': val,
+                                    'unit': '건',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+                # 기술료 금액 (3번 컬럼)
+                if len(data_row) > 3:
+                    try:
+                        val_str = str(data_row[3]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '기술이전',
+                                    'indicator_type': '기술료',
+                                    'value': val,
+                                    'unit': '백만원',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+        # 3. 국제협력 테이블
+        elif '국제협력' in header_text or '해외연구자' in header_text:
+            if len(rows) >= 3:
+                data_row = rows[-1]
+
+                # 해외연구자 유치 (0번 컬럼)
+                if len(data_row) > 0:
+                    try:
+                        val_str = str(data_row[0]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '국제협력',
+                                    'indicator_type': '해외연구자유치',
+                                    'value': val,
+                                    'unit': '명',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+                # 국내연구자 파견 (1번 컬럼)
+                if len(data_row) > 1:
+                    try:
+                        val_str = str(data_row[1]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '국제협력',
+                                    'indicator_type': '국내연구자파견',
+                                    'value': val,
+                                    'unit': '명',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+                # 국제학술회의 개최 (2번 컬럼)
+                if len(data_row) > 2:
+                    try:
+                        val_str = str(data_row[2]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '국제협력',
+                                    'indicator_type': '국제학술회의개최',
+                                    'value': val,
+                                    'unit': '건',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+        # 4. 인력양성 테이블
+        elif '학위배출' in header_text or '박사' in header_text:
+            if len(rows) >= 3:
+                data_row = rows[-1]
+
+                # 박사 (0번 컬럼)
+                if len(data_row) > 0:
+                    try:
+                        val_str = str(data_row[0]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '인력양성',
+                                    'indicator_type': '박사배출',
+                                    'value': val,
+                                    'unit': '명',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+                # 석사 (1번 컬럼)
+                if len(data_row) > 1:
+                    try:
+                        val_str = str(data_row[1]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '인력양성',
+                                    'indicator_type': '석사배출',
+                                    'value': val,
+                                    'unit': '명',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
+                # 연구과제 참여인력 (4번 컬럼)
+                if len(data_row) > 4:
+                    try:
+                        val_str = str(data_row[4]).replace(',', '').strip()
+                        if val_str and val_str != '-':
+                            val = float(val_str)
+                            if val > 0:
+                                normalized.append({
+                                    'id': self._get_next_id('performance'),
+                                    'sub_project_id': self.current_context['sub_project_id'],
+                                    'raw_data_id': raw_data_id,
+                                    'performance_year': year,
+                                    'indicator_category': '인력양성',
+                                    'indicator_type': '연구과제참여인력',
+                                    'value': val,
+                                    'unit': '명',
+                                    'original_text': str(rows)
+                                })
+                    except: pass
+
         return normalized
-    
+
     def _normalize_budget_data(self, rows: List[List], raw_data_id: int) -> List[Dict]:
         """예산 데이터 정규화 - 연도별/유형별 분리"""
         normalized = []
-        
-        for row in rows[1:]:
-            if len(row) < 2:
+
+        if not rows or len(rows) < 2:
+            return []
+
+        # 헤더 찾기 - 연도와 타입 매핑
+        header_row = None
+        year_columns = {}  # {컬럼 인덱스: (연도, 실적/계획)}
+
+        for row in rows:
+            row_text = ' '.join(str(c) for c in row).lower()
+            # "사업비 구분" 같은 헤더 행 찾기
+            if '사업비' in row_text or ('구분' in row_text and '20' in row_text):
+                # 헤더 행 발견 - 각 컬럼에서 연도 추출
+                for idx, cell in enumerate(row):
+                    cell_str = str(cell).strip()
+                    # 연도 찾기 (2021년 실적, 2024년 계획 등)
+                    year_match = re.search(r'(20\d{2})', cell_str)
+                    if year_match:
+                        year = int(year_match.group(1))
+                        is_actual = '실적' in cell_str
+                        year_columns[idx] = (year, '실적' if is_actual else '계획')
+                header_row = row
+                break
+
+        if not header_row or not year_columns:
+            return []
+
+        # 데이터 행 처리
+        for row in rows:
+            # 헤더 행 건너뛰기
+            if row == header_row:
                 continue
-            
-            # 연도 추출
-            year_text = str(row[0])
-            year_match = re.search(r'(\d{4})', year_text)
-            if not year_match:
+
+            # 빈 행 건너뛰기
+            if not any(cell for cell in row if cell and str(cell).strip()):
                 continue
-            
-            budget_year = int(year_match.group(1))
-            
-            # 예산 금액 추출
-            for i, cell in enumerate(row[1:], 1):
+
+            # 첫 번째 컬럼에서 예산 타입 추출
+            budget_type_text = str(row[0]).strip().lower()
+
+            # "소계", "합계" 건너뛰기
+            if any(skip in budget_type_text for skip in ['소계', '합계', '총계', '구분']):
+                continue
+
+            # 예산 타입 결정
+            budget_type = None
+            if '정부' in budget_type_text or '국비' in budget_type_text:
+                budget_type = '정부'
+            elif '민간' in budget_type_text:
+                budget_type = '민간'
+            elif '지방' in budget_type_text:
+                budget_type = '지방비'
+            else:
+                # 알 수 없는 타입은 건너뛰기
+                continue
+
+            # 각 연도 컬럼 처리
+            for col_idx, (year, category) in year_columns.items():
+                if col_idx >= len(row):
+                    continue
+
+                cell_str = str(row[col_idx]).strip()
+
+                # 빈 값이나 "-" 제외
+                if not cell_str or cell_str in ['-', '', 'nan']:
+                    continue
+
                 try:
-                    amount = float(str(cell).replace(',', '').strip())
+                    amount = float(cell_str.replace(',', '').replace('백만원', '').strip())
                     if amount <= 0:
                         continue
-                    
-                    # 예산 타입 결정
-                    budget_type = '정부'  # 기본값
-                    if i == 2:
-                        budget_type = '민간'
-                    elif i == 3:
-                        budget_type = '지방비'
-                    elif i == 4:
-                        budget_type = '기타'
-                    
-                    # 실적/계획 구분
-                    is_actual = budget_year < self.current_context['plan_year']
-                    
+
+                    # 실적/계획 구분 (연도 기준)
+                    is_actual = year < self.current_context['plan_year'] or category == '실적'
+
                     record = {
                         'id': self._get_next_id('budget'),
                         'sub_project_id': self.current_context['sub_project_id'],
                         'raw_data_id': raw_data_id,
-                        'budget_year': budget_year,
-                        'budget_category': '실적' if is_actual else '계획',
+                        'budget_year': year,
+                        'budget_category': category,
                         'budget_type': budget_type,
                         'amount': amount,
                         'currency': 'KRW',
@@ -533,94 +624,39 @@ class GovernmentStandardNormalizer:
                         'original_text': str(row)
                     }
                     normalized.append(record)
-                    
+
                 except (ValueError, TypeError):
                     continue
-        
+
         return normalized
-    
-    def _process_table(self, table: Dict, page_number: int, table_index: int, 
-                      category: str) -> bool:
-        """테이블 처리"""
-        rows = table.get('data', [])
-        if not rows:
-            return False
-        
-        self.validation_stats['total_tables'] += 1
-        
-        # 원본 저장
-        raw_data_id = self._save_raw_data(category, table, page_number, table_index)
-        
-        # 테이블 타입 감지
-        table_type = self._detect_table_type(rows)
-        
-        # 카테고리별 처리
-        if category == 'overview':
-            # 사업개요는 원본 형태로 저장
-            self._process_overview(rows, raw_data_id)
-            
-        elif category == 'performance':
-            # 성과 데이터 정규화
-            normalized = self._normalize_performance_data(rows, raw_data_id)
-            self.data['normalized_performances'].extend(normalized)
-            self.validation_stats['normalized_records'] += len(normalized)
-            
-        elif category == 'plan':
-            # 계획 데이터 처리
-            if '일정' in table_type or '분기' in table_type:
-                # 일정 정규화
-                for row in rows[1:]:
-                    if len(row) >= 2:
-                        period = str(row[0]).strip()
-                        task = str(row[1]).strip() if len(row) > 1 else ""
-                        detail = str(row[2]).strip() if len(row) > 2 else ""
-                        
-                        if period and not '구분' in period:
-                            normalized = self._normalize_schedule_data(
-                                period, task, detail, raw_data_id
-                            )
-                            self.data['normalized_schedules'].extend(normalized)
-                            self.validation_stats['normalized_records'] += len(normalized)
-                            
-            elif '예산' in table_type or '사업비' in table_type:
-                # 예산 정규화
-                normalized = self._normalize_budget_data(rows, raw_data_id)
-                self.data['normalized_budgets'].extend(normalized)
-                self.validation_stats['normalized_records'] += len(normalized)
-        
-        self.validation_stats['processed_tables'] += 1
-        return True
-    
-    def _detect_table_type(self, rows: List[List]) -> str:
-        """테이블 타입 감지"""
-        if not rows:
-            return "unknown"
-        
-        headers = ' '.join(str(h) for h in rows[0]).lower()
-        first_cols = ' '.join(str(row[0]) for row in rows[:3] if row).lower()
-        combined = headers + ' ' + first_cols
-        
-        if '내역사업' in combined:
-            return "내역사업"
-        elif any(k in combined for k in ['사업개요', '주관기관', '관리기관']):
-            return "사업개요"
-        elif any(k in combined for k in ['특허', '논문', '기술이전', '인력']):
-            return "성과"
-        elif any(k in combined for k in ['예산', '사업비', '백만원']):
-            return "예산"
-        elif any(k in combined for k in ['분기', '일정', '추진']):
-            return "일정"
-        
-        return "unknown"
-    
-    def _process_overview(self, rows: List[List], raw_data_id: int):
-        """사업개요 처리"""
+
+    def _process_overview(self, full_text: str, tables: List[Dict], page_number: int, raw_data_id: int):
+        """사업개요 처리 - 전체 텍스트와 테이블 모두 사용"""
+
+        # 테이블에서 기본 정보 추출
         overview_data = {}
-        for row in rows:
-            if len(row) >= 2:
-                key = str(row[0]).strip()
-                value = str(row[1]).strip()
-                overview_data[key] = value
+        for table in tables:
+            rows = table.get('data', [])
+            for row in rows:
+                if len(row) >= 2:
+                    key = str(row[0]).strip()
+                    value = str(row[1]).strip()
+                    if key and value:
+                        overview_data[key] = value
+
+        # full_text에서 사업목표, 사업내용 추출
+        objective = ""
+        content = ""
+
+        # 사업목표 추출
+        obj_match = re.search(r'○\s*사업목표\s*(.*?)(?:○\s*사업내용|$)', full_text, re.DOTALL)
+        if obj_match:
+            objective = obj_match.group(1).strip()
+
+        # 사업내용 추출
+        content_match = re.search(r'○\s*사업내용\s*(.*?)(?:\(2\)|②|$)', full_text, re.DOTALL)
+        if content_match:
+            content = content_match.group(1).strip()
 
         # DB 스키마에 맞게 데이터 저장
         self.data['normalized_overviews'].append({
@@ -628,358 +664,276 @@ class GovernmentStandardNormalizer:
             'sub_project_id': self.current_context['sub_project_id'],
             'raw_data_id': raw_data_id,
             'overview_type': '사업개요',
-            'content': overview_data.get('사업개요', overview_data.get('사업목표', '')),
-            'objective': overview_data.get('사업목표', overview_data.get('목표', '')),
-            'target_outcome': overview_data.get('목표성과', overview_data.get('기대효과', ''))
+            'main_project': overview_data.get('세부사업명', ''),
+            'sub_project': overview_data.get('내역사업명', ''),
+            'field': overview_data.get('대표분야', ''),
+            'project_type': overview_data.get('사업성격', ''),
+            'objective': objective,
+            'content': content,
+            'managing_dept': overview_data.get('주관기관', ''),
+            'managing_org': overview_data.get('관리기관', '')
         })
-    
-    def _process_sub_project(self, rows: List[List]) -> bool:
+
+    def _process_sub_project(self, text: str, tables: List[Dict]) -> bool:
         """내역사업 처리"""
-        for row in rows:
-            if len(row) < 2:
-                continue
-            
-            key = str(row[0]).strip()
-            value = str(row[1]).strip()
-            
-            if '내역사업명' in key and value:
-                # 이미 등록된 내역사업인지 체크
-                for proj in self.data['sub_projects']:
-                    if proj['sub_project_name'] == value:
-                        self.current_context['sub_project_id'] = proj['id']
-                        logger.info(f"📌 기존 내역사업 재사용: {value} (ID: {proj['id']})")
-                        return True
-                
-                # 새로운 내역사업 생성
-                sub_id = self._get_next_id('sub_project')
-                project = {
-                    'id': sub_id,
-                    'project_code': f"GOV-{self.current_context['document_year']}-{sub_id:03d}",
-                    'department_name': '과학기술정보통신부',
-                    'main_project_name': self.current_context.get('main_project', ''),
-                    'sub_project_name': value,
-                    'document_year': self.current_context['document_year']
-                }
-                
-                self.data['sub_projects'].append(project)
-                self.current_context['sub_project_id'] = sub_id
-                
-                logger.info(f"✅ 내역사업 등록: {value} (ID: {sub_id})")
+        sub_project_name = None
+        main_project_name = None
+
+        # 테이블에서 찾기
+        for table in tables:
+            rows = table.get('data', [])
+            for row in rows:
+                if len(row) < 2:
+                    continue
+
+                key = str(row[0]).strip()
+                value = str(row[1]).strip()
+
+                if '내역사업명' in key and value:
+                    sub_project_name = value
+                elif '세부사업명' in key:
+                    main_project_name = value
+
+        # 텍스트에서 찾기 (테이블에서 못 찾았을 경우)
+        if not sub_project_name:
+            match = re.search(r'내역사업명\s+([^\n]+)', text)
+            if match:
+                sub_project_name = match.group(1).strip()
+
+        if not main_project_name:
+            match = re.search(r'세부사업명\s+([^\n]+)', text)
+            if match:
+                main_project_name = match.group(1).strip()
+
+        if not sub_project_name:
+            return False
+
+        # 이미 등록된 내역사업인지 체크
+        for proj in self.data['sub_projects']:
+            if proj['sub_project_name'] == sub_project_name:
+                self.current_context['sub_project_id'] = proj['id']
+                logger.info(f"📌 기존 내역사업 재사용: {sub_project_name} (ID: {proj['id']})")
                 return True
-            elif '세부사업명' in key:
-                self.current_context['main_project'] = value
-        
-        return False
-    
+
+        # 새로운 내역사업 생성
+        sub_id = self._get_next_id('sub_project')
+        project = {
+            'id': sub_id,
+            'project_code': f"GOV-{self.current_context['document_year']}-{sub_id:03d}",
+            'department_name': '과학기술정보통신부',
+            'main_project_name': main_project_name or '바이오·의료기술개발',
+            'sub_project_name': sub_project_name,
+            'document_year': self.current_context['document_year']
+        }
+
+        self.data['sub_projects'].append(project)
+        self.current_context['sub_project_id'] = sub_id
+
+        logger.info(f"✅ 내역사업 등록: {sub_project_name} (ID: {sub_id})")
+        return True
+
     def normalize(self, json_data: Dict) -> bool:
-        """JSON 데이터 정규화 (extract_pdf_to_json.py 호환)"""
+        """JSON 데이터 정규화 (전체 처리)"""
         try:
             logger.info(f"🚀 정부 표준 정규화 시작")
-            
+
             # 메타데이터에서 문서 연도 추출
             metadata = json_data.get('metadata', {})
             self.current_context['document_year'] = metadata.get('document_year', 2024)
             self.current_context['performance_year'] = self.current_context['document_year'] - 1
             self.current_context['plan_year'] = self.current_context['document_year']
-            
-            # extract_pdf_to_json.py 형식: pages 안에 page별 데이터
+
+            # 페이지별 처리
             pages_data = json_data.get('pages', [])
-            
-            # 페이지별로 처리할 테이블 수집
-            pages_by_number = {}
-            all_tables = []
-            
+            self.validation_stats['total_pages'] = len(pages_data)
+
             for page in pages_data:
                 page_num = page.get('page_number', 1)
                 page_category = page.get('category')
                 page_sub_project = page.get('sub_project')
+                page_full_text = page.get('full_text', '')
                 page_tables = page.get('tables', [])
-                
-                if page_num not in pages_by_number:
-                    pages_by_number[page_num] = {
-                        'category': page_category,
-                        'sub_project': page_sub_project,
-                        'tables': []
-                    }
-                
-                for table in page_tables:
-                    table_with_context = {
-                        'page_number': page_num,
-                        'category': page_category or table.get('category'),
-                        'sub_project': page_sub_project,
-                        'data': table.get('data', []),
-                        'table_number': table.get('table_number', 1)
-                    }
-                    pages_by_number[page_num]['tables'].append(table_with_context)
-                    all_tables.append(table_with_context)
 
-            logger.info(f"📖 총 {len(pages_by_number)}개 페이지, {len(all_tables)}개 테이블 처리")
+                self.validation_stats['total_tables'] += len(page_tables)
 
-            # 페이지별 처리
-            for page_num in sorted(pages_by_number.keys()):
-                page_data = pages_by_number[page_num]
-                page_tables = page_data['tables']
-                page_category = page_data.get('category')
-                page_sub_project = page_data.get('sub_project')
-                
-                # sub_project가 페이지에 명시되어 있으면 설정 (중복 체크)
-                if page_sub_project and not self.current_context.get('sub_project_id'):
+                # sub_project가 페이지에 명시되어 있으면 설정/전환 (null이 아닐 때만)
+                if page_sub_project:
                     # 이미 등록된 내역사업인지 체크
                     existing_project = None
                     for proj in self.data['sub_projects']:
                         if proj['sub_project_name'] == page_sub_project:
                             existing_project = proj
                             break
-                    
+
                     if existing_project:
-                        self.current_context['sub_project_id'] = existing_project['id']
-                        logger.info(f"📌 기존 내역사업 사용: {page_sub_project} (ID: {existing_project['id']})")
+                        # 기존 프로젝트로 전환
+                        if self.current_context.get('sub_project_id') != existing_project['id']:
+                            self.current_context['sub_project_id'] = existing_project['id']
+                            logger.info(f"📌 내역사업 전환: {page_sub_project} (ID: {existing_project['id']})")
                     else:
-                        # 새로운 내역사업 생성
-                        sub_id = self._get_next_id('sub_project')
-                        project = {
-                            'id': sub_id,
-                            'project_code': f"GOV-{self.current_context['document_year']}-{sub_id:03d}",
-                            'department_name': '과학기술정보통신부',
-                            'main_project_name': self.current_context.get('main_project', '바이오·의료기술개발'),
-                            'sub_project_name': page_sub_project,
-                            'document_year': self.current_context['document_year']
-                        }
-                        self.data['sub_projects'].append(project)
-                        self.current_context['sub_project_id'] = sub_id
-                        logger.info(f"✅ 내역사업 등록: {page_sub_project} (ID: {sub_id})")
-
-                # 카테고리 결정 (페이지 카테고리 우선, 없으면 휴리스틱)
-                if page_category:
-                    category = page_category
-                elif page_num == 1:
-                    category = 'overview'
-                elif 2 <= page_num <= 3:
-                    category = 'performance'
+                        # 새로운 내역사업 처리
+                        self._process_sub_project(page_full_text, page_tables)
                 else:
-                    category = 'plan'
+                    # 페이지에 sub_project 정보가 없으면 텍스트/테이블에서 찾기
+                    if '내역사업명' in page_full_text:
+                        self._process_sub_project(page_full_text, page_tables)
 
-                # 각 테이블의 내용으로 카테고리 재확인 및 처리
-                for table in page_tables:
-                    rows = table.get('data', [])
-                    if rows:
-                        table_type = self._detect_table_type(rows)
+                # sub_project_id가 없으면 건너뛰기
+                if not self.current_context.get('sub_project_id'):
+                    continue
 
-                        # 내역사업 테이블이면 먼저 처리 (이미 sub_project_id가 있으면 스킵)
-                        if not self.current_context.get('sub_project_id'):
-                            if table_type == "내역사업" or any('내역사업명' in str(cell) for row in rows for cell in row):
-                                if self._process_sub_project(rows):
-                                    category = 'overview'
-                        elif table_type == "성과" or any(kw in str(rows) for kw in ['특허', '논문', '인력양성']):
-                            category = 'performance'
-                        elif table_type == "일정" or any('분기' in str(cell) for row in rows for cell in row):
-                            category = 'plan'
-                        elif table_type == "예산" or any(kw in str(rows) for kw in ['예산', '사업비']):
-                            category = 'plan'
+                # 원본 데이터 저장
+                raw_data_id = self._save_raw_data(
+                    page_category or 'unknown',
+                    {'full_text': page_full_text, 'tables': page_tables},
+                    page_num,
+                    0
+                )
 
-                        # 테이블 카테고리 오버라이드
-                        if table.get('category'):
-                            category = table['category']
+                # ⭐ 대표성과와 주요계획은 모든 페이지에서 추출 (category와 무관)
+                if self.current_context.get('sub_project_id'):
+                    # 대표성과 추출
+                    if '① 대표성과' in page_full_text:
+                        achievements = self._extract_key_achievements(page_full_text, page_num)
+                        self.data['key_achievements'].extend(achievements)
 
-                # 테이블 처리
-                for idx, table in enumerate(page_tables):
-                    # 데이터 처리 (sub_project_id가 있을 때만)
-                    if self.current_context.get('sub_project_id'):
-                        self._process_table(table, page_num, idx, category)
-                    else:
-                        # sub_project가 없으면 일단 테이블에서 찾기
+                    # 주요 추진계획 추출 (여러 패턴 지원)
+                    if ('① 주요 추진계획' in page_full_text or
+                        '① 주요추진계획' in page_full_text or
+                        '(3) 2024년도 추진계획' in page_full_text):
+                        plan_details = self._extract_plan_details(page_full_text, page_num)
+                        self.data['plan_details'].extend(plan_details)
+
+                # 카테고리별 처리
+                if page_category == 'overview':
+                    # 사업개요 처리
+                    self._process_overview(page_full_text, page_tables, page_num, raw_data_id)
+
+                elif page_category == 'performance':
+
+                    # 테이블 처리 (성과 또는 예산)
+                    for idx, table in enumerate(page_tables):
                         rows = table.get('data', [])
-                        if rows:
-                            table_type = self._detect_table_type(rows)
-                            if table_type == "내역사업":
-                                self._process_sub_project(rows)
+                        if not rows:
+                            continue
+
+                        # 테이블 타입 감지
+                        header_text = ' '.join(str(c) for c in rows[0]).lower()
+
+                        # 예산 테이블인지 확인 (performance 카테고리에 예산 테이블이 있을 수 있음)
+                        if '사업비' in header_text or ('구분' in header_text and '실적' in header_text and '계획' in header_text):
+                            # 예산 테이블
+                            table_raw_id = self._save_raw_data('plan', table, page_num, idx)
+                            normalized = self._normalize_budget_data(rows, table_raw_id)
+                            self.data['normalized_budgets'].extend(normalized)
+                            self.validation_stats['normalized_records'] += len(normalized)
+                        else:
+                            # 성과 테이블
+                            table_raw_id = self._save_raw_data('performance', table, page_num, idx)
+                            normalized = self._normalize_performance_table(rows, table_raw_id)
+                            self.data['normalized_performances'].extend(normalized)
+                            self.validation_stats['normalized_records'] += len(normalized)
+
+                        self.validation_stats['processed_tables'] += 1
+
+                elif page_category == 'plan':
+
+                    # 테이블 처리
+                    for idx, table in enumerate(page_tables):
+                        rows = table.get('data', [])
+                        if not rows:
+                            continue
+
+                        table_raw_id = self._save_raw_data('plan', table, page_num, idx)
+
+                        # 테이블 타입 감지
+                        header_text = ' '.join(str(c) for c in rows[0]).lower()
+
+                        if '일정' in header_text or '분기' in header_text or '추진' in header_text:
+                            # 일정 테이블
+                            for row in rows[1:]:
+                                if len(row) >= 2:
+                                    period = str(row[0]).strip()
+                                    task = str(row[1]).strip() if len(row) > 1 else ""
+                                    detail = str(row[2]).strip() if len(row) > 2 else ""
+
+                                    if period and '구분' not in period:
+                                        normalized = self._normalize_schedule_data(
+                                            period, task, detail, table_raw_id
+                                        )
+                                        self.data['normalized_schedules'].extend(normalized)
+                                        self.validation_stats['normalized_records'] += len(normalized)
+
+                        elif '예산' in header_text or '사업비' in header_text:
+                            # 예산 테이블
+                            normalized = self._normalize_budget_data(rows, table_raw_id)
+                            self.data['normalized_budgets'].extend(normalized)
+                            self.validation_stats['normalized_records'] += len(normalized)
+
+                        self.validation_stats['processed_tables'] += 1
 
             logger.info(f"✅ 정규화 완료: {len(self.data['sub_projects'])}개 내역사업")
             return True
-            
+
         except Exception as e:
             logger.error(f"처리 실패: {e}")
             import traceback
             traceback.print_exc()
             return False
-    
-    def process_document(self) -> bool:
-        """문서 전체 처리"""
-        try:
-            logger.info(f"🚀 정부 표준 정규화 시작: {self.json_path.name}")
-            
-            # JSON 로드
-            with open(self.json_path, 'r', encoding='utf-8') as f:
-                json_data = json.load(f)
-            
-            # normalize 메서드 호출
-            return self.normalize(json_data)
-            
-        except Exception as e:
-            logger.error(f"처리 실패: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-    
+
     def save_to_csv(self):
         """CSV 저장"""
         for table_name, records in self.data.items():
             if not records or table_name == 'data_statistics':
                 continue
-            
+
             csv_path = self.output_dir / f"{table_name}.csv"
-            
+
             with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                 if records:
                     writer = csv.DictWriter(f, fieldnames=records[0].keys())
                     writer.writeheader()
                     writer.writerows(records)
-            
+
             logger.info(f"✅ {table_name}.csv 저장 ({len(records)}건)")
-    
-    def validate_data(self) -> Dict[str, Any]:
-        """데이터 검증"""
-        validation_result = {
-            'success': True,
-            'statistics': {},
-            'issues': []
-        }
-        
-        # 통계 수집
-        stats = {
-            '내역사업': len(self.data['sub_projects']),
-            '원본데이터': len(self.data['raw_data']),
-            '정규화_일정': len(self.data['normalized_schedules']),
-            '정규화_성과': len(self.data['normalized_performances']),
-            '정규화_예산': len(self.data['normalized_budgets'])
-        }
-        
-        validation_result['statistics'] = stats
-        
-        # 데이터 무결성 검증
-        # 1. 모든 내역사업에 대한 데이터 존재 확인
-        for project in self.data['sub_projects']:
-            project_id = project['id']
-            
-            has_schedule = any(s['sub_project_id'] == project_id 
-                             for s in self.data['normalized_schedules'])
-            has_performance = any(p['sub_project_id'] == project_id 
-                                 for p in self.data['normalized_performances'])
-            has_budget = any(b['sub_project_id'] == project_id 
-                           for b in self.data['normalized_budgets'])
-            
-            if not (has_schedule or has_performance or has_budget):
-                validation_result['issues'].append(
-                    f"내역사업 '{project['sub_project_name']}'에 데이터 없음"
-                )
-        
-        # 2. 정규화 비율 확인
-        if self.validation_stats['total_tables'] > 0:
-            process_rate = (self.validation_stats['processed_tables'] / 
-                          self.validation_stats['total_tables'] * 100)
-            validation_result['process_rate'] = f"{process_rate:.1f}%"
-        
-        # 3. 분기별 데이터 완성도 확인
-        quarters = {}
-        for schedule in self.data['normalized_schedules']:
-            q = schedule['quarter']
-            if q not in quarters:
-                quarters[q] = 0
-            quarters[q] += 1
-        
-        validation_result['quarter_distribution'] = quarters
-        
-        # 성공 여부 판정
-        validation_result['success'] = len(validation_result['issues']) == 0
-        
-        return validation_result
-    
+
     def print_statistics(self):
         """통계 출력"""
         print("\n" + "="*80)
         print("📊 정부 표준 정규화 완료")
         print("="*80)
-        
+
         print(f"\n📁 내역사업: {len(self.data['sub_projects'])}개")
         for project in self.data['sub_projects']:
             print(f"  - {project['sub_project_name']} ({project['project_code']})")
-        
+
         print(f"\n📋 데이터 통계:")
         print(f"  원본 데이터: {len(self.data['raw_data'])}건")
         print(f"  정규화 일정: {len(self.data['normalized_schedules'])}건")
         print(f"  정규화 성과: {len(self.data['normalized_performances'])}건")
         print(f"  정규화 예산: {len(self.data['normalized_budgets'])}건")
-        
-        # 분기별 일정 분포
-        quarters = {}
-        for schedule in self.data['normalized_schedules']:
-            q = f"{schedule['quarter']}/4분기"
-            if q not in quarters:
-                quarters[q] = 0
-            quarters[q] += 1
-        
-        print(f"\n📅 분기별 일정 분포:")
-        for q, count in sorted(quarters.items()):
-            print(f"  {q}: {count}건")
-        
-        # 성과 지표별 분포
-        indicators = {}
-        for perf in self.data['normalized_performances']:
-            key = f"{perf['indicator_category']}-{perf['indicator_type']}"
-            if key not in indicators:
-                indicators[key] = 0
-            indicators[key] = perf['value']
-        
-        print(f"\n📊 성과 지표:")
-        for indicator, value in indicators.items():
-            print(f"  {indicator}: {value}")
-        
-        # 예산 연도별 분포
-        budgets = {}
-        for budget in self.data['normalized_budgets']:
-            year = budget['budget_year']
-            if year not in budgets:
-                budgets[year] = 0
-            budgets[year] += float(budget['amount'])
-        
-        print(f"\n💰 연도별 예산:")
-        for year, amount in sorted(budgets.items()):
-            print(f"  {year}년: {amount:,.0f} 백만원")
-        
+        print(f"  사업개요: {len(self.data['normalized_overviews'])}건")
+        print(f"  대표성과: {len(self.data['key_achievements'])}건")
+        print(f"  주요계획: {len(self.data['plan_details'])}건")
+
         print("="*80 + "\n")
 
 
-def normalize_government_standard(json_path: str, output_dir: str) -> Tuple[bool, Dict]:
-    """정부 표준 정규화 실행"""
-    normalizer = GovernmentStandardNormalizer(json_path, output_dir)
-    
-    # 처리
-    success = normalizer.process_document()
-    
-    if success:
-        # 저장
-        normalizer.save_to_csv()
-        
-        # 통계
-        normalizer.print_statistics()
-        
-        # 검증
-        validation_result = normalizer.validate_data()
-        
-        return True, validation_result
-    
-    return False, {}
-
-
 if __name__ == "__main__":
-    json_file = "output/extracted_data.json"
+    json_file = "output/2024년도 생명공학육성시행계획(안) 부록_내역사업_테스트.json"
     output_folder = "normalized_government"
-    
+
     if Path(json_file).exists():
-        success, validation = normalize_government_standard(json_file, output_folder)
-        
+        normalizer = GovernmentStandardNormalizer(json_file, output_folder)
+
+        with open(json_file, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+
+        success = normalizer.normalize(json_data)
+
         if success:
-            print("\n✅ 정규화 성공!")
-            print(f"검증 결과: {validation}")
+            normalizer.save_to_csv()
+            normalizer.print_statistics()
         else:
             print("❌ 정규화 실패!")
+

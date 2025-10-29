@@ -66,6 +66,93 @@ class PDFtoDBPipeline:
             'db_loaded': False
         }
     
+    def clean_previous_data(self):
+        """이전 실행 데이터 모두 삭제"""
+        logger.info("\n" + "="*80)
+        logger.info("🧹 이전 데이터 정리 중...")
+        logger.info("="*80)
+
+        cleaned_items = []
+
+        # 1. Output JSON 파일 삭제
+        json_files = list(self.output_dir.glob("*.json"))
+        if json_files:
+            for file in json_files:
+                try:
+                    file.unlink()
+                    cleaned_items.append(f"JSON: {file.name}")
+                except Exception as e:
+                    logger.warning(f"파일 삭제 실패 {file}: {e}")
+
+        # 2. 정규화된 CSV 파일 삭제
+        csv_files = list(self.normalized_dir.glob("*.csv"))
+        if csv_files:
+            for file in csv_files:
+                try:
+                    file.unlink()
+                    cleaned_items.append(f"CSV: {file.name}")
+                except Exception as e:
+                    logger.warning(f"파일 삭제 실패 {file}: {e}")
+
+        # 3. DB 테이블 초기화 (skip_db가 아닐 경우)
+        if not self.skip_db:
+            try:
+                import pymysql
+                db_config = MYSQL_CONFIG.copy()
+
+                # 먼저 데이터베이스 연결 (특정 DB 없이)
+                conn = pymysql.connect(
+                    host=db_config['host'],
+                    user=db_config['user'],
+                    password=db_config['password'],
+                    port=db_config.get('port', 3306)
+                )
+                cursor = conn.cursor()
+
+                # 데이터베이스가 존재하는지 확인
+                cursor.execute("SHOW DATABASES LIKE 'government_standard'")
+                db_exists = cursor.fetchone()
+
+                if db_exists:
+                    cursor.execute("USE government_standard")
+
+                    # 모든 테이블 목록 가져오기
+                    cursor.execute("SHOW TABLES")
+                    tables = cursor.fetchall()
+
+                    # 외래 키 제약 조건 비활성화
+                    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+
+                    # 각 테이블 삭제
+                    for (table_name,) in tables:
+                        cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`")
+                        cleaned_items.append(f"DB 테이블: {table_name}")
+
+                    # 외래 키 제약 조건 다시 활성화
+                    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+                    conn.commit()
+                    logger.info("✅ 데이터베이스 테이블 초기화 완료")
+                else:
+                    logger.info("ℹ️  데이터베이스가 존재하지 않습니다 (생성됨)")
+
+                cursor.close()
+                conn.close()
+
+            except Exception as e:
+                logger.warning(f"DB 초기화 실패 (무시하고 계속): {e}")
+
+        # 결과 출력
+        if cleaned_items:
+            logger.info(f"✅ 총 {len(cleaned_items)}개 항목 정리 완료:")
+            for item in cleaned_items[:10]:  # 처음 10개만 출력
+                logger.info(f"   - {item}")
+            if len(cleaned_items) > 10:
+                logger.info(f"   ... 외 {len(cleaned_items) - 10}개")
+        else:
+            logger.info("✅ 삭제할 이전 데이터가 없습니다")
+
+        logger.info("")
+
     def process_pdf(self, pdf_path: Path) -> bool:
         """단일 PDF 처리"""
         try:
@@ -232,6 +319,9 @@ class PDFtoDBPipeline:
         logger.info("🚀 PDF to Database 파이프라인 시작")
         logger.info("="*80)
         
+        # 이전 데이터 정리
+        self.clean_previous_data()
+
         success = False
         
         try:
